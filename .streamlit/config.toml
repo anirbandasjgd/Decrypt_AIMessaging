@@ -1,0 +1,8 @@
+# Force light theme so Mac (dark mode) and Windows (light mode) users see the same UI
+[theme]
+base = "light"
+primaryColor = "#667eea"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f8f9ff"
+textColor = "#31333F"
+font = "sans serif"

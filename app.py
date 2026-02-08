@@ -39,6 +39,14 @@ st.set_page_config(
 # ─── Custom CSS ──────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
+    /* Force consistent light background across Mac/Windows (ignore system dark mode) */
+    .stApp, [data-testid="stAppViewContainer"], main {
+        background-color: #fafafa !important;
+    }
+    section[data-testid="stSidebar"] > div {
+        background: linear-gradient(180deg, #f8f9ff 0%, #f0f2ff 100%) !important;
+    }
+
     /* Main header */
     .main-header {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
