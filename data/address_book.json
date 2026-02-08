@@ -1,0 +1,131 @@
+{
+  "user": {
+    "name": "Sajith",
+    "email": "sajith@company.com",
+    "department": "Management",
+    "role": "Project Manager",
+    "calendar_id": "primary"
+  },
+  "contacts": [
+    {
+      "id": "c001",
+      "name": "Rohit Sharma",
+      "email": "rohit.sharma@company.com",
+      "department": "Digital Marketing",
+      "role": "Marketing Manager",
+      "phone": "+91-9876543210"
+    },
+    {
+      "id": "c002",
+      "name": "Puneet Gupta",
+      "email": "puneet.gupta@company.com",
+      "department": "Tech",
+      "role": "Senior Developer",
+      "phone": "+91-9876543211"
+    },
+    {
+      "id": "c003",
+      "name": "John Mathew",
+      "email": "john.mathew@company.com",
+      "department": "Tech",
+      "role": "Tech Lead",
+      "phone": "+91-9876543212"
+    },
+    {
+      "id": "c004",
+      "name": "Priya Nair",
+      "email": "priya.nair@company.com",
+      "department": "Tech",
+      "role": "Software Engineer",
+      "phone": "+91-9876543213"
+    },
+    {
+      "id": "c005",
+      "name": "Amit Verma",
+      "email": "amit.verma@company.com",
+      "department": "Tech",
+      "role": "DevOps Engineer",
+      "phone": "+91-9876543214"
+    },
+    {
+      "id": "c006",
+      "name": "Sneha Reddy",
+      "email": "sneha.reddy@company.com",
+      "department": "Digital Marketing",
+      "role": "Content Strategist",
+      "phone": "+91-9876543215"
+    },
+    {
+      "id": "c007",
+      "name": "Vikram Singh",
+      "email": "vikram.singh@company.com",
+      "department": "HR",
+      "role": "HR Manager",
+      "phone": "+91-9876543216"
+    },
+    {
+      "id": "c008",
+      "name": "Ananya Joshi",
+      "email": "ananya.joshi@company.com",
+      "department": "HR",
+      "role": "HR Executive",
+      "phone": "+91-9876543217"
+    },
+    {
+      "id": "c009",
+      "name": "Rajesh Kumar",
+      "email": "rajesh.kumar@company.com",
+      "department": "Finance",
+      "role": "Finance Manager",
+      "phone": "+91-9876543218"
+    },
+    {
+      "id": "c010",
+      "name": "Deepika Pillai",
+      "email": "deepika.pillai@company.com",
+      "department": "Finance",
+      "role": "Accountant",
+      "phone": "+91-9876543219"
+    },
+    {
+      "id": "c011",
+      "name": "Karthik Menon",
+      "email": "karthik.menon@company.com",
+      "department": "Sales",
+      "role": "Sales Director",
+      "phone": "+91-9876543220"
+    },
+    {
+      "id": "c012",
+      "name": "Neha Kapoor",
+      "email": "neha.kapoor@company.com",
+      "department": "Sales",
+      "role": "Sales Executive",
+      "phone": "+91-9876543221"
+    },
+    {
+      "id": "c013",
+      "name": "Arjun Desai",
+      "email": "arjun.desai@company.com",
+      "department": "Product",
+      "role": "Product Manager",
+      "phone": "+91-9876543222"
+    },
+    {
+      "id": "c014",
+      "name": "Meera Iyer",
+      "email": "meera.iyer@company.com",
+      "department": "Design",
+      "role": "UX Designer",
+      "phone": "+91-9876543223"
+    },
+    {
+      "id": "c015",
+      "name": "Suresh Patel",
+      "email": "suresh.patel@company.com",
+      "department": "Tech",
+      "role": "QA Engineer",
+      "phone": "+91-9876543224"
+    }
+  ]
+}

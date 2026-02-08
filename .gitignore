@@ -1,0 +1,34 @@
+# Environment & secrets
+.env
+*.env
+
+# Google OAuth credentials & tokens
+credentials/token.json
+credentials/credentials.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Audio output (generated files)
+audio_output/*.mp3
+audio_output/*.wav
+
+# MoM data (runtime generated)
+data/moms/*.json
+data/meetings.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

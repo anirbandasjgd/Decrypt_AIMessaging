@@ -1,0 +1,26 @@
+# Smart Office Assistant - Dependencies
+# Core
+streamlit>=1.30.0
+openai>=1.0.0
+python-dotenv>=1.0.0
+
+# Google Calendar Integration
+google-api-python-client>=2.100.0
+google-auth-httplib2>=0.1.1
+google-auth-oauthlib>=1.1.0
+
+# Audio Processing
+pydub>=0.25.1
+
+# Voice Input in Streamlit
+audio-recorder-streamlit>=0.0.8
+
+# Data Processing
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Email
+secure-smtplib>=0.1.1
+
+# Utilities
+python-dateutil>=2.8.2
