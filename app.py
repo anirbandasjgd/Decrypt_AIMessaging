@@ -76,11 +76,24 @@ st.markdown("""
     /* Chat styling */
     .stChatMessage { border-radius: 12px; }
     
-    /* Sidebar styling */
+    /* Sidebar styling - ensure text is always visible */
     [data-testid="stSidebar"] {
         background: linear-gradient(180deg, #f8f9ff 0%, #f0f2ff 100%);
     }
-    
+    [data-testid="stSidebar"] .stMarkdown,
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] p,
+    [data-testid="stSidebar"] .stRadio label {
+        color: #31333F !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stMetricLabel"],
+    [data-testid="stSidebar"] [data-testid="stMetricValue"] {
+        color: #31333F !important;
+    }
+    [data-testid="stSidebar"] .stCaption {
+        color: #31333F !important;
+    }
+
     /* Action item table */
     .action-table { width: 100%; border-collapse: collapse; }
     .action-table th {
