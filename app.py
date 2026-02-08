@@ -137,6 +137,7 @@ def init_session_state():
         "mom_store": None,
         "meeting_manager": None,
         "current_page": "Chat",
+        "nav_radio": "Chat",  # keep in sync with sidebar radio for routing
         "calendar_mode": "mock",  # "mock" or "google"
         "voice_input_enabled": True,
     }
@@ -193,7 +194,7 @@ def render_sidebar():
         st.markdown(f"## {APP_ICON} {APP_TITLE}")
         st.markdown("---")
 
-        # Navigation
+        # Navigation - use nav_radio as single source of truth so routing always matches selection
         nav_pages = ["Chat", "Address Book", "Meetings", "MoM Archive", "Settings"]
         page = st.radio(
             "Navigate",
@@ -201,6 +202,12 @@ def render_sidebar():
             key="nav_radio",
         )
         st.session_state.current_page = page
+        # Force rerun when user changes selection so main content updates (fixes sidebar nav on some browsers)
+        _nav_prev = st.session_state.get("_nav_prev")
+        if _nav_prev is not None and _nav_prev != page:
+            st.session_state["_nav_prev"] = page
+            st.rerun()
+        st.session_state["_nav_prev"] = page
 
         st.markdown("---")
 
@@ -1033,7 +1040,9 @@ PAGE_MAP = {
 def main():
     """Main application entry point."""
     render_sidebar()
-    page_func = PAGE_MAP.get(st.session_state.current_page, render_chat_page)
+    # Use nav_radio (sidebar selection) as source of truth so Address Book / Meetings etc. always load
+    current = st.session_state.get("nav_radio") or st.session_state.get("current_page", "Chat")
+    page_func = PAGE_MAP.get(current, render_chat_page)
     page_func()
 
 
