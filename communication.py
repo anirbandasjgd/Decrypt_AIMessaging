@@ -222,6 +222,140 @@ def send_mom_email(
     return send_email(to_emails, subject, html, text, attachments)
 
 
+def send_meeting_invite_notification(
+    to_email: str,
+    meeting_title: str,
+    date_str: str,
+    time_str: str,
+    participant_names: list,
+    calendar_link: str = "",
+) -> dict:
+    """
+    Send the user an email confirming that the meeting invite is being sent to participants.
+
+    Args:
+        to_email: Email address of the user who scheduled the meeting (e.g. app owner)
+        meeting_title: Title of the meeting
+        date_str: Meeting date (e.g. YYYY-MM-DD)
+        time_str: Meeting time
+        participant_names: List of participant names
+        calendar_link: Optional link to open the event in calendar
+
+    Returns:
+        dict with 'success' and optional 'error'
+    """
+    if not to_email or not is_email_configured():
+        return {"success": False, "error": "Email not configured or no recipient"}
+
+    subject = f"Meeting invite sent: {meeting_title}"
+
+    participants_line = ", ".join(participant_names) if participant_names else "—"
+
+    html = f"""
+    <html>
+    <body style="font-family: sans-serif; max-width: 600px;">
+        <h2 style="color: #667eea;">Meeting invite is being sent</h2>
+        <p>Your meeting invite has been sent to the participants.</p>
+        <table style="border-collapse: collapse; margin: 1em 0;">
+            <tr><td style="padding: 6px 12px; font-weight: bold;">Meeting</td><td style="padding: 6px 12px;">{meeting_title}</td></tr>
+            <tr><td style="padding: 6px 12px; font-weight: bold;">Date</td><td style="padding: 6px 12px;">{date_str}</td></tr>
+            <tr><td style="padding: 6px 12px; font-weight: bold;">Time</td><td style="padding: 6px 12px;">{time_str}</td></tr>
+            <tr><td style="padding: 6px 12px; font-weight: bold;">Participants</td><td style="padding: 6px 12px;">{participants_line}</td></tr>
+        </table>
+        <p>Calendar invites have been sent to all participants.</p>
+        {f'<p><a href="{calendar_link}" style="color: #667eea;">Open in Calendar</a></p>' if calendar_link else ''}
+        <p style="color: #666; font-size: 0.9em;">— Smart Office Assistant</p>
+    </body>
+    </html>
+    """
+
+    text = (
+        f"Meeting invite is being sent.\n\n"
+        f"Meeting: {meeting_title}\n"
+        f"Date: {date_str}\n"
+        f"Time: {time_str}\n"
+        f"Participants: {participants_line}\n\n"
+        "Calendar invites have been sent to all participants."
+    )
+
+    return send_email([to_email], subject, html, text)
+
+
+def send_meeting_invite_to_participants(
+    attendee_emails: list[str],
+    meeting_title: str,
+    date_str: str,
+    time_str: str,
+    duration_minutes: int = 45,
+    participant_names: list = None,
+    calendar_link: str = "",
+    meet_link: str = "",
+) -> dict:
+    """
+    Send each participant an email notifying them they have been invited to the meeting.
+    Called when a meeting is scheduled so attendees receive an email even if calendar
+    invites are not delivered (e.g. Mock Calendar) or in addition to calendar invites.
+
+    Args:
+        attendee_emails: List of participant email addresses
+        meeting_title: Title of the meeting
+        date_str: Meeting date
+        time_str: Meeting time
+        duration_minutes: Duration in minutes
+        participant_names: Optional list of participant names for the email body
+        calendar_link: Optional link to open in calendar
+        meet_link: Optional Google Meet link
+
+    Returns:
+        dict with 'success', 'sent_count', and optional 'error'
+    """
+    if not attendee_emails or not is_email_configured():
+        return {"success": False, "sent_count": 0, "error": "Email not configured or no attendees"}
+
+    participants_line = ", ".join(participant_names) if participant_names else ", ".join(attendee_emails)
+
+    subject = f"You're invited: {meeting_title}"
+
+    html = f"""
+    <html>
+    <body style="font-family: sans-serif; max-width: 600px;">
+        <h2 style="color: #667eea;">You're invited to a meeting</h2>
+        <p>You have been invited to the following meeting.</p>
+        <table style="border-collapse: collapse; margin: 1em 0;">
+            <tr><td style="padding: 6px 12px; font-weight: bold;">Meeting</td><td style="padding: 6px 12px;">{meeting_title}</td></tr>
+            <tr><td style="padding: 6px 12px; font-weight: bold;">Date</td><td style="padding: 6px 12px;">{date_str}</td></tr>
+            <tr><td style="padding: 6px 12px; font-weight: bold;">Time</td><td style="padding: 6px 12px;">{time_str}</td></tr>
+            <tr><td style="padding: 6px 12px; font-weight: bold;">Duration</td><td style="padding: 6px 12px;">{duration_minutes} minutes</td></tr>
+            <tr><td style="padding: 6px 12px; font-weight: bold;">Participants</td><td style="padding: 6px 12px;">{participants_line}</td></tr>
+        </table>
+        {f'<p><a href="{calendar_link}" style="color: #667eea;">Add to Calendar</a></p>' if calendar_link else ''}
+        {f'<p><a href="{meet_link}" style="color: #667eea;">Join Google Meet</a></p>' if meet_link else ''}
+        <p style="color: #666; font-size: 0.9em;">— Smart Office Assistant</p>
+    </body>
+    </html>
+    """
+
+    text = (
+        f"You're invited to a meeting.\n\n"
+        f"Meeting: {meeting_title}\n"
+        f"Date: {date_str}\n"
+        f"Time: {time_str}\n"
+        f"Duration: {duration_minutes} minutes\n"
+        f"Participants: {participants_line}\n\n"
+    )
+    if calendar_link:
+        text += f"Add to Calendar: {calendar_link}\n"
+    if meet_link:
+        text += f"Join Google Meet: {meet_link}\n"
+
+    result = send_email(attendee_emails, subject, html, text)
+    if result.get("success"):
+        result["sent_count"] = len(attendee_emails)
+    else:
+        result["sent_count"] = 0
+    return result
+
+
 def _build_mom_email_html(mom_data: dict, audio_path: Optional[str] = None) -> str:
     """Build HTML email content for MoM."""
     title = mom_data.get("title", "Meeting")

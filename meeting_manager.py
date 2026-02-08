@@ -13,7 +13,8 @@ from nlu_engine import (
     parse_command, generate_followup_question,
     generate_confirmation_message, classify_confirmation
 )
-from config import DEFAULT_MEETING_DURATION_MINUTES
+from config import DEFAULT_MEETING_DURATION_MINUTES, SMTP_EMAIL
+from communication import send_meeting_invite_notification, send_meeting_invite_to_participants
 
 
 # ─── Conversation States ─────────────────────────────────────────────────────
@@ -611,6 +612,30 @@ class MeetingManager:
                 msg_parts.append(f"[Join Google Meet]({cal_result['meet_link']})")
 
             msg_parts.append(f"\nCalendar invites have been sent to all participants.")
+
+            # Notify the organizer by email that the meeting invite is being sent
+            if SMTP_EMAIL:
+                send_meeting_invite_notification(
+                    to_email=SMTP_EMAIL,
+                    meeting_title=self.pending_meeting["title"],
+                    date_str=date_str,
+                    time_str=meeting_dt.strftime("%I:%M %p"),
+                    participant_names=participant_names,
+                    calendar_link=cal_result.get("html_link", ""),
+                )
+
+            # Send email notification to each participant (e.g. Anirban Das) so they receive the invite
+            if attendee_emails:
+                send_meeting_invite_to_participants(
+                    attendee_emails=attendee_emails,
+                    meeting_title=self.pending_meeting["title"],
+                    date_str=date_str,
+                    time_str=meeting_dt.strftime("%I:%M %p"),
+                    duration_minutes=duration,
+                    participant_names=participant_names,
+                    calendar_link=cal_result.get("html_link", ""),
+                    meet_link=cal_result.get("meet_link", ""),
+                )
         else:
             msg_parts = [
                 f"Meeting recorded locally but calendar invite could not be sent.",
@@ -620,6 +645,18 @@ class MeetingManager:
                 f"**Time:** {meeting_dt.strftime('%I:%M %p')} ({duration} minutes)",
                 f"**Participants:** {', '.join(participant_names)}",
             ]
+            # Still notify participants by email so they receive the invite even when calendar fails
+            if attendee_emails:
+                send_meeting_invite_to_participants(
+                    attendee_emails=attendee_emails,
+                    meeting_title=self.pending_meeting["title"],
+                    date_str=date_str,
+                    time_str=meeting_dt.strftime("%I:%M %p"),
+                    duration_minutes=duration,
+                    participant_names=participant_names,
+                    calendar_link=cal_result.get("html_link", ""),
+                    meet_link=cal_result.get("meet_link", ""),
+                )
 
         self.reset()
         return {
