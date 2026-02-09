@@ -5,7 +5,7 @@ Generates structured MoM from transcripts, extracts action items.
 import json
 from datetime import datetime
 from openai import OpenAI
-from config import OPENAI_API_KEY, MOM_MODEL
+from config import OPENAI_API_KEY, MOM_MODEL, debug_log
 
 
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -122,13 +122,17 @@ def generate_mom_from_transcript(
     if meeting_date:
         context = f"Meeting Date: {meeting_date}\n{context}"
 
+    mom_messages = [
+        {"role": "system", "content": MOM_SYSTEM_PROMPT},
+        {"role": "user", "content": context}
+    ]
+    debug_log("[OpenAI MoM generate_mom_from_transcript] Request: model=%s, system_prompt_len=%d, user_content_len=%d"
+                 % (MOM_MODEL, len(MOM_SYSTEM_PROMPT), len(context)))
+    debug_log("[OpenAI MoM generate_mom_from_transcript] User content (first 500 chars): %s" % (context[:500] + "..." if len(context) > 500 else context))
     try:
         response = client.chat.completions.create(
             model=MOM_MODEL,
-            messages=[
-                {"role": "system", "content": MOM_SYSTEM_PROMPT},
-                {"role": "user", "content": context}
-            ],
+            messages=mom_messages,
             tools=MOM_EXTRACTION_TOOLS,
             tool_choice={"type": "function", "function": {"name": "generate_mom"}},
             temperature=0.2,
@@ -136,6 +140,7 @@ def generate_mom_from_transcript(
 
         tool_call = response.choices[0].message.tool_calls[0]
         mom_data = json.loads(tool_call.function.arguments)
+        debug_log("[OpenAI MoM generate_mom_from_transcript] Response: tool_call_args=%s" % mom_data)
 
         # Enrich with metadata
         mom_data["date"] = meeting_date or datetime.now().strftime("%Y-%m-%d")

@@ -12,7 +12,8 @@ from pathlib import Path
 # Ensure the smart_office_assistant directory is on the path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from config import APP_TITLE, APP_ICON, GOOGLE_CREDENTIALS_FILE
+from config import APP_TITLE, APP_ICON, GOOGLE_CREDENTIALS_FILE, DEBUG_LOGGING
+import config as config_module
 from address_book import AddressBook
 from calendar_service import CalendarService, MockCalendarService
 from storage import MeetingStore, MoMStore
@@ -179,6 +180,10 @@ def _init_calendar_service():
 
 
 init_session_state()
+
+# Sync debug logging from Settings checkbox so it applies on all pages (not only when Settings is open)
+if "debug_logging_checkbox" in st.session_state:
+    config_module.DEBUG_LOGGING = st.session_state["debug_logging_checkbox"]
 
 # ─── Handle programmatic page switches (must run before widgets render) ──────
 if st.session_state.get("_goto_page"):
@@ -926,13 +931,13 @@ def render_settings_page():
     </div>
     """, unsafe_allow_html=True)
 
-    tab1, tab2, tab3 = st.tabs(["Google Calendar", "Email", "About"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Google Calendar", "Email", "About", "Debug"])
 
     with tab1:
         st.subheader("Google Calendar Integration")
 
         if GOOGLE_CREDENTIALS_FILE.exists():
-            st.success("credentials.json found!")
+            st.success(f"Credentials found: `{GOOGLE_CREDENTIALS_FILE.name}`")
 
             if st.session_state.calendar_mode == "google":
                 st.success("Connected to Google Calendar")
@@ -954,9 +959,9 @@ def render_settings_page():
             4. Go to **Credentials** > **Create Credentials** > **OAuth 2.0 Client ID**
             5. Select **Desktop Application** as the application type
             6. Download the credentials JSON file
-            7. Rename it to `credentials.json` and place it in:
+            7. Place the file in the credentials folder (as `credentials.json` or keep the default `client_secret_*.json` name):
             """)
-            st.code(str(GOOGLE_CREDENTIALS_FILE))
+            st.code(str(GOOGLE_CREDENTIALS_FILE.parent))
             st.markdown("""
             8. Restart the application and click **Connect to Google Calendar**
             
@@ -991,6 +996,20 @@ SMTP_PASSWORD=your_app_specific_password
             > **For Gmail:** You need to use an [App Password](https://myaccount.google.com/apppasswords) 
             > instead of your regular password.
             """)
+
+    with tab4:
+        st.subheader("Debug logging")
+        debug_enabled = st.checkbox(
+            "Print debug messages to the terminal",
+            value=DEBUG_LOGGING,
+            key="debug_logging_checkbox",
+            help="When enabled, debug output (e.g. OpenAI requests/responses, or any debug_log() calls) is printed in the terminal where you run the app.",
+        )
+        config_module.DEBUG_LOGGING = debug_enabled
+        if debug_enabled:
+            st.info("Debug logging is **on**. Check the terminal/console where Streamlit is running.")
+        else:
+            st.caption("You can also set `DEBUG_LOGGING=true` in your `.env` file to enable on startup.")
 
     with tab3:
         st.subheader("About Smart Office Assistant")

@@ -16,7 +16,8 @@ from typing import Optional
 from openai import OpenAI
 from config import (
     OPENAI_API_KEY, TTS_MODEL, TTS_VOICE, AUDIO_OUTPUT_DIR,
-    SMTP_SERVER, SMTP_PORT, SMTP_EMAIL, SMTP_PASSWORD
+    SMTP_SERVER, SMTP_PORT, SMTP_EMAIL, SMTP_PASSWORD,
+    debug_log,
 )
 
 
@@ -47,6 +48,8 @@ def generate_tts_summary(
 
     output_path = AUDIO_OUTPUT_DIR / filename
 
+    debug_log("[OpenAI TTS generate_tts_summary] Request: model=%s, voice=%s, input_text_len=%d" % (TTS_MODEL, voice, len(text)))
+    debug_log("[OpenAI TTS generate_tts_summary] Input text (first 300 chars): %s" % (text[:300] + "..." if len(text) > 300 else text))
     try:
         response = client.audio.speech.create(
             model=TTS_MODEL,
@@ -56,6 +59,7 @@ def generate_tts_summary(
 
         # Stream to file
         response.stream_to_file(str(output_path))
+        debug_log("[OpenAI TTS generate_tts_summary] Response: audio stream saved to %s" % output_path)
 
         return {
             "success": True,

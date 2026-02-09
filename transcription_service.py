@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 from openai import OpenAI
-from config import OPENAI_API_KEY, WHISPER_MODEL, MAX_AUDIO_FILE_SIZE_MB
+from config import OPENAI_API_KEY, WHISPER_MODEL, MAX_AUDIO_FILE_SIZE_MB, debug_log
 
 
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -77,7 +77,10 @@ def transcribe_audio(
                 if prompt:
                     kwargs["prompt"] = prompt
 
+                debug_log("[OpenAI Whisper transcribe_audio] Request: model=%s, language=%s, prompt=%s" % (WHISPER_MODEL, language, prompt))
                 result = client.audio.transcriptions.create(**kwargs)
+                debug_log("[OpenAI Whisper transcribe_audio] Response: transcript_len=%d, text (first 300 chars): %s"
+                             % (len(result.text), (result.text[:300] + "..." if len(result.text) > 300 else result.text)))
 
             return {
                 "success": True,

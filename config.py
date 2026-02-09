@@ -31,7 +31,16 @@ TTS_MODEL = "tts-1"                                          # For text-to-speec
 TTS_VOICE = "alloy"                                          # TTS voice choice
 
 # ─── Google Calendar ─────────────────────────────────────────────────────────
-GOOGLE_CREDENTIALS_FILE = CREDENTIALS_DIR / "credentials.json"
+# Prefer credentials.json; fall back to client_secret_*.json (Google Cloud download name)
+def _resolve_credentials_file() -> Path:
+    candidate = CREDENTIALS_DIR / "credentials.json"
+    if candidate.exists():
+        return candidate
+    for path in CREDENTIALS_DIR.glob("client_secret_*.json"):
+        return path
+    return candidate  # return default path for clearer error messages
+
+GOOGLE_CREDENTIALS_FILE = _resolve_credentials_file()
 GOOGLE_TOKEN_FILE = CREDENTIALS_DIR / "token.json"
 GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/calendar",
@@ -58,3 +67,13 @@ MEETINGS_FILE = DATA_DIR / "meetings.json"
 APP_TITLE = "Smart Office Assistant"
 APP_ICON = "🏢"
 MAX_AUDIO_FILE_SIZE_MB = 25  # OpenAI Whisper limit
+
+# ─── Debug ────────────────────────────────────────────────────────────────────
+# Set DEBUG_LOGGING=true in .env to print debug messages to stdout (use debug_log() anywhere in the app)
+DEBUG_LOGGING = os.getenv("DEBUG_LOGGING", "yes").lower() in ("true", "1", "yes")
+
+
+def debug_log(msg: str) -> None:
+    """Print message to stdout only when DEBUG_LOGGING is enabled. Use anywhere in the app for debug output."""
+    if DEBUG_LOGGING:
+        print(msg, flush=True)

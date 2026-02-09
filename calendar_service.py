@@ -179,6 +179,91 @@ class CalendarService:
         except Exception as e:
             return {"success": False, "error": f"Failed to create event: {str(e)}"}
 
+    def update_event(
+        self,
+        event_id: str,
+        start_datetime: datetime,
+        duration_minutes: int = DEFAULT_MEETING_DURATION_MINUTES,
+        calendar_id: str = "primary",
+        send_notifications: bool = True,
+    ) -> dict:
+        """
+        Update an existing calendar event's start/end time.
+        Sends updates to attendees when send_notifications is True.
+        """
+        if not self.is_authenticated():
+            return {"success": False, "error": "Not authenticated with Google Calendar"}
+
+        end_datetime = start_datetime + timedelta(minutes=duration_minutes)
+        body = {
+            "start": {
+                "dateTime": start_datetime.isoformat(),
+                "timeZone": "Asia/Kolkata",
+            },
+            "end": {
+                "dateTime": end_datetime.isoformat(),
+                "timeZone": "Asia/Kolkata",
+            },
+        }
+
+        try:
+            event = self.service.events().patch(
+                calendarId=calendar_id,
+                eventId=event_id,
+                body=body,
+                sendUpdates="all" if send_notifications else "none",
+                conferenceDataVersion=1,
+            ).execute()
+
+            return {
+                "success": True,
+                "event_id": event.get("id"),
+                "html_link": event.get("htmlLink"),
+                "meet_link": event.get("hangoutLink", ""),
+                "start": event["start"].get("dateTime"),
+                "end": event["end"].get("dateTime"),
+            }
+        except HttpError as e:
+            return {"success": False, "error": f"Calendar API error: {str(e)}"}
+        except Exception as e:
+            return {"success": False, "error": f"Failed to update event: {str(e)}"}
+
+    def update_event_attendees(
+        self,
+        event_id: str,
+        attendee_emails: list[str],
+        calendar_id: str = "primary",
+        send_notifications: bool = True,
+    ) -> dict:
+        """
+        Update an event's attendee list. Sends invites to new attendees and updates for existing ones.
+        """
+        if not self.is_authenticated():
+            return {"success": False, "error": "Not authenticated with Google Calendar"}
+
+        body = {"attendees": [{"email": email} for email in attendee_emails]}
+
+        try:
+            event = self.service.events().patch(
+                calendarId=calendar_id,
+                eventId=event_id,
+                body=body,
+                sendUpdates="all" if send_notifications else "none",
+                conferenceDataVersion=1,
+            ).execute()
+
+            return {
+                "success": True,
+                "event_id": event.get("id"),
+                "html_link": event.get("htmlLink"),
+                "meet_link": event.get("hangoutLink", ""),
+                "attendees": [a.get("email") for a in event.get("attendees", [])],
+            }
+        except HttpError as e:
+            return {"success": False, "error": f"Calendar API error: {str(e)}"}
+        except Exception as e:
+            return {"success": False, "error": f"Failed to update attendees: {str(e)}"}
+
     # ─── Availability Checking ───────────────────────────────────────────
     def check_availability(
         self,
@@ -377,6 +462,38 @@ class MockCalendarService(CalendarService):
             "end": end_datetime.isoformat(),
             "attendees": attendee_emails or [],
         }
+
+    def update_event(self, event_id: str, start_datetime: datetime,
+                    duration_minutes=45, calendar_id="primary",
+                    send_notifications=True) -> dict:
+        end_datetime = start_datetime + timedelta(minutes=duration_minutes)
+        for event in self.events:
+            if event.get("id") == event_id:
+                event["start"] = start_datetime.isoformat()
+                event["end"] = end_datetime.isoformat()
+                return {
+                    "success": True,
+                    "event_id": event_id,
+                    "html_link": event.get("html_link", f"https://calendar.google.com/event?eid={event_id}"),
+                    "meet_link": event.get("meet_link", f"https://meet.google.com/mock-{event_id[:8]}"),
+                    "start": start_datetime.isoformat(),
+                    "end": end_datetime.isoformat(),
+                }
+        return {"success": False, "error": "Event not found"}
+
+    def update_event_attendees(self, event_id: str, attendee_emails: list,
+                               calendar_id="primary", send_notifications=True) -> dict:
+        for event in self.events:
+            if event.get("id") == event_id:
+                event["attendees"] = list(attendee_emails) if attendee_emails else []
+                return {
+                    "success": True,
+                    "event_id": event_id,
+                    "html_link": event.get("html_link", f"https://calendar.google.com/event?eid={event_id}"),
+                    "meet_link": event.get("meet_link", f"https://meet.google.com/mock-{event_id[:8]}"),
+                    "attendees": event["attendees"],
+                }
+        return {"success": False, "error": "Event not found"}
 
     def check_availability(self, date, duration_minutes=45, calendar_id="primary") -> list[dict]:
         day_start = date.replace(hour=WORKING_HOURS_START, minute=0, second=0)

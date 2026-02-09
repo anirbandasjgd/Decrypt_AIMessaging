@@ -5,7 +5,7 @@ Parses natural language commands into structured meeting actions using OpenAI.
 import json
 from datetime import datetime
 from openai import OpenAI
-from config import OPENAI_API_KEY, NLU_MODEL
+from config import OPENAI_API_KEY, NLU_MODEL, debug_log
 
 
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -18,7 +18,7 @@ user commands and extract structured information for meeting scheduling and mana
 Today's date is {today}. The current day is {day_of_week}.
 
 IMPORTANT RULES:
-1. For date references like "next Tuesday", "coming Monday", calculate the actual date.
+1. For date references like "next Tuesday", "coming Monday", "Mon 16th Feb 2026", calculate the actual date and ALWAYS output it in YYYY-MM-DD format in the date field (e.g. 2026-02-16).
 2. "Thursday after next week" means the Thursday of the week AFTER next week.
 3. "Coming week Monday" means the Monday of the upcoming week (next Monday).
 4. When a user says "all members of [Department]", set is_department_group to true.
@@ -28,10 +28,15 @@ IMPORTANT RULES:
 8. If "first available slot" or similar is mentioned, set use_first_available to true.
 9. Duration defaults can be left empty if not mentioned - the system will ask or use default.
 10. Always identify if this is a follow-up to a previous meeting.
-11. Detect the intent: schedule_meeting, reschedule_meeting, cancel_meeting, 
+11. Detect the intent: schedule_meeting, reschedule_meeting, cancel_meeting,
+    add_attendees_to_meeting, remove_attendees_from_meeting,
     upload_recording, search_mom, manage_contacts, list_meetings, general_chat.
 12. For names, preserve them as spoken. If only first name given, include just first name.
 13. Parse meeting title/subject if mentioned, otherwise generate a reasonable one.
+14. For reschedule_meeting: use meeting_ref_participants to identify WHICH meeting (e.g. "my meeting with Nitin" -> meeting_ref_participants: [{{name: "Nitin"}}]). Put the new date and time in date (YYYY-MM-DD) and time (HH:MM). Ignore extra text like "and add X" for finding the meeting.
+15. For add_attendees_to_meeting: "Add X contact to my meeting with Y" or "Add X to my meeting with Y" means participants: [{{name: "X"}}] (who to add) and meeting_ref_participants: [{{name: "Y"}}] (which meeting). Always fill both when the user names someone to add and someone in the meeting.
+16. For remove_attendees_from_meeting: "Remove X from my meeting with Y" means participants: [{{name: "X"}}] (who to remove) and meeting_ref_participants: [{{name: "Y"}}] (which meeting).
+17. CRITICAL - Latest message only: The intent and ALL extracted fields (participants, meeting_ref_participants, date, time, etc.) must be determined ONLY from the **most recent** user message. Earlier messages are for context only (e.g. to resolve "that meeting"). If the most recent message is "add Dummy1 to my meeting with Nitin", intent MUST be add_attendees_to_meeting with participants: [{{name: "Dummy1"}}] and meeting_ref_participants: [{{name: "Nitin"}}], even if previous messages were about rescheduling. Do not carry over intent from earlier turns.
 
 Respond ONLY with valid JSON matching the required schema."""
 
@@ -49,6 +54,7 @@ EXTRACTION_FUNCTIONS = [
                         "type": "string",
                         "enum": [
                             "schedule_meeting", "reschedule_meeting", "cancel_meeting",
+                            "add_attendees_to_meeting", "remove_attendees_from_meeting",
                             "upload_recording", "search_mom", "manage_contacts",
                             "list_meetings", "general_chat", "followup_meeting"
                         ],
@@ -105,6 +111,18 @@ EXTRACTION_FUNCTIONS = [
                             "followup_reference": {
                                 "type": "string",
                                 "description": "Reference to the previous meeting if this is a follow-up"
+                            },
+                            "meeting_ref_participants": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {"type": "string"},
+                                        "department": {"type": "string"}
+                                    },
+                                    "required": ["name"]
+                                },
+                                "description": "For add/remove attendees: participants who identify WHICH meeting (e.g. 'meeting with John' -> [{name: 'John'}]). participants array is then who to add or remove."
                             }
                         }
                     },
@@ -147,8 +165,13 @@ def parse_command(user_message: str, conversation_history: list[dict] = None) ->
         for msg in conversation_history[-10:]:  # Last 10 messages for context
             messages.append(msg)
 
-    messages.append({"role": "user", "content": user_message})
+    # Emphasize that intent and extraction must come from this latest message only
+    current_message = user_message.strip()
+    if conversation_history:
+        current_message = "[Current message - determine intent and entities from this only]: " + current_message
+    messages.append({"role": "user", "content": current_message})
 
+    debug_log("[OpenAI NLU parse_command] Request: model=%s, messages=%s" % (NLU_MODEL, messages))
     try:
         response = client.chat.completions.create(
             model=NLU_MODEL,
@@ -157,10 +180,9 @@ def parse_command(user_message: str, conversation_history: list[dict] = None) ->
             tool_choice={"type": "function", "function": {"name": "process_command"}},
             temperature=0.1,
         )
-
-        # Extract the function call result
         tool_call = response.choices[0].message.tool_calls[0]
         result = json.loads(tool_call.function.arguments)
+        debug_log("[OpenAI NLU parse_command] Response: intent=%s, result=%s" % (result.get("intent"), result))
         return result
 
     except Exception as e:
@@ -194,18 +216,22 @@ def generate_followup_question(missing_fields: list[str], context: dict = None) 
         return questions[0]
 
     # Use AI to combine questions naturally
+    followup_messages = [
+        {"role": "system", "content": "Combine these questions into one natural, "
+         "friendly follow-up message. Be concise."},
+        {"role": "user", "content": "\n".join(questions)}
+    ]
+    debug_log("[OpenAI NLU generate_followup_question] Request: model=%s, messages=%s" % (NLU_MODEL, followup_messages))
     try:
         response = client.chat.completions.create(
             model=NLU_MODEL,
-            messages=[
-                {"role": "system", "content": "Combine these questions into one natural, "
-                 "friendly follow-up message. Be concise."},
-                {"role": "user", "content": "\n".join(questions)}
-            ],
+            messages=followup_messages,
             temperature=0.7,
             max_tokens=150
         )
-        return response.choices[0].message.content
+        content = response.choices[0].message.content
+        debug_log("[OpenAI NLU generate_followup_question] Response: %s" % content)
+        return content
     except Exception:
         return " Also, ".join(questions)
 
@@ -251,20 +277,23 @@ def classify_confirmation(user_message: str) -> str:
         return "cancelled"
 
     # Use AI for ambiguous cases
+    classify_messages = [
+        {"role": "system", "content": "Classify the user's response as one of: "
+         "'confirmed' (they want to proceed), 'cancelled' (they want to stop), "
+         "or 'modification' (they want to change something). "
+         "Respond with ONLY one word."},
+        {"role": "user", "content": user_message}
+    ]
+    debug_log("[OpenAI NLU classify_confirmation] Request: model=%s, messages=%s" % (NLU_MODEL, classify_messages))
     try:
         response = client.chat.completions.create(
             model=NLU_MODEL,
-            messages=[
-                {"role": "system", "content": "Classify the user's response as one of: "
-                 "'confirmed' (they want to proceed), 'cancelled' (they want to stop), "
-                 "or 'modification' (they want to change something). "
-                 "Respond with ONLY one word."},
-                {"role": "user", "content": user_message}
-            ],
+            messages=classify_messages,
             temperature=0,
             max_tokens=10
         )
         result = response.choices[0].message.content.strip().lower()
+        debug_log("[OpenAI NLU classify_confirmation] Response: %s" % result)
         if result in ("confirmed", "cancelled", "modification"):
             return result
         return "modification"
