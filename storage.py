@@ -7,14 +7,16 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
-from config import MEETINGS_FILE, MOMS_DIR
+from config import MEETINGS_FILE, MOMS_DIR, sanitize_user_for_path
 
 
 class MeetingStore:
-    """Manages meeting records with thread tracking."""
+    """Manages meeting records with thread tracking. Supports per-user data; admin sees all."""
 
-    def __init__(self, filepath: Optional[Path] = None):
+    def __init__(self, filepath: Optional[Path] = None, user_email: Optional[str] = None, is_admin: bool = False):
         self.filepath = filepath or MEETINGS_FILE
+        self.user_email = user_email or ""
+        self.is_admin = is_admin
         self.data = self._load()
 
     def _load(self) -> dict:
@@ -28,9 +30,15 @@ class MeetingStore:
         with open(self.filepath, "w", encoding="utf-8") as f:
             json.dump(self.data, f, indent=2, ensure_ascii=False, default=str)
 
+    def _filter_by_user(self, meetings_list: list[dict]) -> list[dict]:
+        """Return meetings for current user, or all if admin."""
+        if self.is_admin or not self.user_email:
+            return meetings_list
+        return [m for m in meetings_list if m.get("user_email") == self.user_email]
+
     @property
     def meetings(self) -> list[dict]:
-        return self.data.get("meetings", [])
+        return self._filter_by_user(self.data.get("meetings", []))
 
     def add_meeting(self, meeting_info: dict, parent_meeting_id: Optional[str] = None) -> dict:
         """
@@ -51,6 +59,7 @@ class MeetingStore:
             "id": meeting_id,
             "thread_id": thread_id,
             "parent_meeting_id": parent_meeting_id,
+            "user_email": self.user_email,
             "title": meeting_info.get("title", "Untitled Meeting"),
             "date": meeting_info.get("date", ""),
             "time": meeting_info.get("time", ""),
@@ -114,10 +123,16 @@ class MeetingStore:
                 results.append(m)
         return results
 
+    def _can_modify_meeting(self, meeting: dict) -> bool:
+        """Check if current user can modify this meeting."""
+        return self.is_admin or meeting.get("user_email") == self.user_email
+
     def update_meeting(self, meeting_id: str, **kwargs) -> Optional[dict]:
-        """Update a meeting record."""
+        """Update a meeting record (only own meetings unless admin)."""
         for m in self.data["meetings"]:
             if m["id"] == meeting_id:
+                if not self._can_modify_meeting(m):
+                    return None
                 m.update(kwargs)
                 self.save()
                 return m
@@ -128,7 +143,10 @@ class MeetingStore:
         return self.update_meeting(meeting_id, status="cancelled")
 
     def delete_meeting(self, meeting_id: str) -> bool:
-        """Permanently delete a meeting and remove it from its thread."""
+        """Permanently delete a meeting (only own unless admin)."""
+        meeting = self.get_meeting(meeting_id)
+        if not meeting or not self._can_modify_meeting(meeting):
+            return False
         original_len = len(self.data["meetings"])
         self.data["meetings"] = [
             m for m in self.data["meetings"] if m["id"] != meeting_id
@@ -165,10 +183,15 @@ class MeetingStore:
 
 
 class MoMStore:
-    """Manages Minutes of Meeting storage and retrieval."""
+    """Manages Minutes of Meeting storage and retrieval. Per-user directory; admin sees all."""
 
-    def __init__(self, directory: Optional[Path] = None):
-        self.directory = directory or MOMS_DIR
+    def __init__(self, directory: Optional[Path] = None, user_email: Optional[str] = None, is_admin: bool = False):
+        self.user_email = user_email or ""
+        self.is_admin = is_admin
+        if directory is not None:
+            self.directory = directory
+        else:
+            self.directory = MOMS_DIR / sanitize_user_for_path(self.user_email) if self.user_email else MOMS_DIR
         self.directory.mkdir(parents=True, exist_ok=True)
         self.index_file = self.directory / "index.json"
         self.index = self._load_index()
@@ -215,6 +238,7 @@ class MoMStore:
         index_entry = {
             "id": mom_id,
             "meeting_id": meeting_id,
+            "user_email": self.user_email,
             "title": mom_record["title"],
             "date": mom_record["date"],
             "attendees": mom_record["attendees"],
@@ -226,16 +250,38 @@ class MoMStore:
 
         return mom_id
 
-    def get_mom(self, mom_id: str) -> Optional[dict]:
-        """Retrieve a full MoM by ID."""
-        mom_file = self.directory / f"{mom_id}.json"
+    def get_mom(self, mom_id: str, user_email: Optional[str] = None) -> Optional[dict]:
+        """Retrieve a full MoM by ID. For admin, pass user_email to load from that user's dir."""
+        if user_email and self.is_admin:
+            dir_path = MOMS_DIR / sanitize_user_for_path(user_email)
+            mom_file = dir_path / f"{mom_id}.json"
+        else:
+            mom_file = self.directory / f"{mom_id}.json"
         if mom_file.exists():
             with open(mom_file, "r", encoding="utf-8") as f:
                 return json.load(f)
         return None
 
     def get_all_moms(self) -> list[dict]:
-        """Get index entries for all MoMs."""
+        """Get index entries for all MoMs (all users if admin)."""
+        if self.is_admin:
+            # Aggregate from all user directories under MOMS_DIR
+            all_entries = []
+            for subdir in MOMS_DIR.iterdir():
+                if subdir.is_dir():
+                    idx_file = subdir / "index.json"
+                    if idx_file.exists():
+                        try:
+                            with open(idx_file, "r", encoding="utf-8") as f:
+                                idx = json.load(f)
+                            for entry in idx.get("moms", []):
+                                entry = dict(entry)
+                                if "user_email" not in entry:
+                                    entry["user_email"] = ""  # legacy
+                                all_entries.append(entry)
+                        except (json.JSONDecodeError, OSError):
+                            pass
+            return sorted(all_entries, key=lambda x: x.get("created_at", ""), reverse=True)
         return sorted(
             self.index.get("moms", []),
             key=lambda x: x.get("created_at", ""),
@@ -261,9 +307,9 @@ class MoMStore:
 
         return results
 
-    def get_mom_formatted(self, mom_id: str) -> Optional[str]:
-        """Get a MoM formatted as markdown."""
-        mom = self.get_mom(mom_id)
+    def get_mom_formatted(self, mom_id: str, user_email: Optional[str] = None) -> Optional[str]:
+        """Get a MoM formatted as markdown. For admin, pass user_email to load from that user's dir."""
+        mom = self.get_mom(mom_id, user_email)
         if not mom:
             return None
 

@@ -6,14 +6,19 @@ import json
 import uuid
 from pathlib import Path
 from typing import Optional
-from config import ADDRESS_BOOK_FILE
+from config import ADDRESS_BOOK_FILE, get_address_book_path_for_user
 
 
 class AddressBook:
-    """Manages the office address book with contacts and departments."""
+    """Manages the office address book with contacts and departments. Per-user file."""
 
-    def __init__(self, filepath: Optional[Path] = None):
-        self.filepath = filepath or ADDRESS_BOOK_FILE
+    def __init__(self, filepath: Optional[Path] = None, user_email: Optional[str] = None):
+        if filepath is not None:
+            self.filepath = filepath
+        elif user_email:
+            self.filepath = get_address_book_path_for_user(user_email)
+        else:
+            self.filepath = ADDRESS_BOOK_FILE
         self.data = self._load()
 
     # ─── Persistence ─────────────────────────────────────────────────────

@@ -60,8 +60,26 @@ SMTP_EMAIL = os.getenv("SMTP_EMAIL", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")  # App-specific password for Gmail
 
 # ─── Data Files ──────────────────────────────────────────────────────────────
+LOGIN_FILE = DATA_DIR / "login.json"
 ADDRESS_BOOK_FILE = DATA_DIR / "address_book.json"
 MEETINGS_FILE = DATA_DIR / "meetings.json"
+
+
+def sanitize_user_for_path(email: str) -> str:
+    """Convert user email to a safe filename segment (e.g. for per-user files)."""
+    if not email:
+        return "default"
+    return email.strip().replace("@", "_at_").replace(".", "_")
+
+
+def get_address_book_path_for_user(email: str) -> Path:
+    """Get the address book JSON path for a given user."""
+    return DATA_DIR / f"address_book_{sanitize_user_for_path(email)}.json"
+
+
+def get_chat_history_path_for_user(email: str) -> Path:
+    """Get the chat history JSON path for a given user."""
+    return DATA_DIR / f"chat_{sanitize_user_for_path(email)}.json"
 
 # ─── App Settings ────────────────────────────────────────────────────────────
 APP_TITLE = "Smart Office Assistant"

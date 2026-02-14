@@ -1,0 +1,19 @@
+{
+  "users": [
+    {
+      "email": "Admin",
+      "password": "Admin",
+      "role": "admin"
+    },
+    {
+      "email": "anirbandasjgd@gmail.com",
+      "password": "test123",
+      "role": "user"
+    },
+    {
+      "email": "angana.das@company.com",
+      "password": "test123",
+      "role": "user"
+    }
+  ]
+}

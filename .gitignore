@@ -22,8 +22,12 @@ audio_output/*.mp3
 audio_output/*.wav
 
 # MoM data (runtime generated)
-data/moms/*.json
+data/moms/
 data/meetings.json
+
+# Per-user data (do not commit)
+data/chat_*.json
+data/address_book_*.json
 
 # IDE
 .vscode/

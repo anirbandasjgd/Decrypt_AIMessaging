@@ -12,8 +12,9 @@ from pathlib import Path
 # Ensure the smart_office_assistant directory is on the path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from config import APP_TITLE, APP_ICON, GOOGLE_CREDENTIALS_FILE, DEBUG_LOGGING
+from config import APP_TITLE, APP_ICON, GOOGLE_CREDENTIALS_FILE, DEBUG_LOGGING, get_chat_history_path_for_user
 import config as config_module
+from auth import verify_user, load_login_data, ensure_login_file
 from address_book import AddressBook
 from calendar_service import CalendarService, MockCalendarService
 from storage import MeetingStore, MoMStore
@@ -122,14 +123,70 @@ st.markdown("""
         transition: box-shadow 0.2s;
     }
     .contact-card:hover { box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+
+    /* Login form */
+    .login-container { max-width: 400px; margin: 4rem auto; padding: 2rem; }
 </style>
 """, unsafe_allow_html=True)
+
+
+# ─── Login ────────────────────────────────────────────────────────────────────
+
+def render_login_screen():
+    """Show login form; on success set session_state.user_email and is_admin, then rerun."""
+    ensure_login_file()
+    st.markdown("<div class='login-container'>", unsafe_allow_html=True)
+    st.markdown(f"## {APP_ICON} {APP_TITLE}")
+    st.markdown("Please sign in to continue.")
+    with st.form("login_form"):
+        email = st.text_input("Email or username", placeholder="e.g. Admin or your@email.com")
+        password = st.text_input("Password", type="password", placeholder="Password")
+        submitted = st.form_submit_button("Sign in")
+    if submitted:
+        email = (email or "").strip()
+        password = (password or "").strip()
+        if not email or not password:
+            st.error("Please enter both email and password.")
+        else:
+            ok, is_admin = verify_user(email, password)
+            if ok:
+                st.session_state["user_email"] = email
+                st.session_state["is_admin"] = is_admin
+                st.session_state["_nav_prev"] = None
+                st.rerun()
+            else:
+                st.error("Invalid email or password.")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def load_chat_history_for_user(user_email: str) -> list:
+    """Load persisted chat messages for this user."""
+    path = get_chat_history_path_for_user(user_email)
+    if path.exists():
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data.get("messages", [])
+        except (json.JSONDecodeError, OSError):
+            pass
+    return []
+
+
+def save_chat_history_for_user(user_email: str, messages: list) -> None:
+    """Persist chat messages for this user."""
+    path = get_chat_history_path_for_user(user_email)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"messages": messages}, f, indent=2)
 
 
 # ─── Session State Initialization ────────────────────────────────────────────
 
 def init_session_state():
-    """Initialize all session state variables."""
+    """Initialize all session state variables (requires user_email and is_admin from login)."""
+    user_email = st.session_state.get("user_email", "")
+    is_admin = st.session_state.get("is_admin", False)
+
     defaults = {
         "messages": [],
         "address_book": None,
@@ -138,23 +195,28 @@ def init_session_state():
         "mom_store": None,
         "meeting_manager": None,
         "current_page": "Chat",
-        "nav_radio": "Chat",  # keep in sync with sidebar radio for routing
-        "calendar_mode": "mock",  # "mock" or "google"
+        "nav_radio": "Chat",
+        "calendar_mode": "mock",
         "voice_input_enabled": True,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
 
-    # Initialize service objects
+    # Load chat history for this user on first load after login
+    if user_email and st.session_state.get("_chat_loaded_for_user") != user_email:
+        st.session_state["messages"] = load_chat_history_for_user(user_email)
+        st.session_state["_chat_loaded_for_user"] = user_email
+
+    # Initialize service objects (per-user when user_email is set)
     if st.session_state.address_book is None:
-        st.session_state.address_book = AddressBook()
+        st.session_state.address_book = AddressBook(user_email=user_email)
 
     if st.session_state.meeting_store is None:
-        st.session_state.meeting_store = MeetingStore()
+        st.session_state.meeting_store = MeetingStore(user_email=user_email, is_admin=is_admin)
 
     if st.session_state.mom_store is None:
-        st.session_state.mom_store = MoMStore()
+        st.session_state.mom_store = MoMStore(user_email=user_email, is_admin=is_admin)
 
     if st.session_state.calendar_service is None:
         _init_calendar_service()
@@ -179,6 +241,11 @@ def _init_calendar_service():
     st.session_state.calendar_mode = "mock"
 
 
+# ─── Require login ───────────────────────────────────────────────────────────
+if "user_email" not in st.session_state:
+    render_login_screen()
+    st.stop()
+
 init_session_state()
 
 # Sync debug logging from Settings checkbox so it applies on all pages (not only when Settings is open)
@@ -197,6 +264,20 @@ def render_sidebar():
     """Render the sidebar with navigation and tools."""
     with st.sidebar:
         st.markdown(f"## {APP_ICON} {APP_TITLE}")
+        user_email = st.session_state.get("user_email", "")
+        is_admin = st.session_state.get("is_admin", False)
+        role_badge = " (Admin)" if is_admin else ""
+        st.caption(f"Logged in as **{user_email}**{role_badge}")
+        if st.button("Logout", use_container_width=True):
+            keys_to_clear = [
+                "user_email", "is_admin", "_chat_loaded_for_user",
+                "address_book", "meeting_store", "mom_store", "meeting_manager", "calendar_service",
+                "messages",
+            ]
+            for key in keys_to_clear:
+                if key in st.session_state:
+                    del st.session_state[key]
+            st.rerun()
         st.markdown("---")
 
         # Navigation - use nav_radio as single source of truth so routing always matches selection
@@ -299,6 +380,7 @@ def render_chat_page():
         with cc1:
             if st.button("Yes, clear everything", key="confirm_clear"):
                 st.session_state.messages = []
+                save_chat_history_for_user(st.session_state.get("user_email", ""), [])
                 st.session_state.meeting_manager.reset()
                 st.session_state.meeting_manager.conversation_history = []
                 st.session_state["_confirm_clear_chat"] = False
@@ -385,6 +467,7 @@ def _process_chat_input(text: str, already_added: bool = False):
         with st.chat_message("assistant"):
             st.markdown(response)
 
+    save_chat_history_for_user(st.session_state.get("user_email", ""), st.session_state.messages)
     st.rerun()
 
 
@@ -532,12 +615,14 @@ def render_meetings_page():
             st.info("No meetings found. Start by scheduling one in the Chat!")
             return
 
+        show_owner = st.session_state.get("is_admin", False)
         for m in meetings:
             status_emoji = {"scheduled": "📅", "completed": "✅", "cancelled": "❌"}.get(
                 m.get("status", "scheduled"), "📅"
             )
+            owner_suffix = f" — *{m.get('user_email', '')}*" if show_owner and m.get("user_email") else ""
             with st.expander(
-                f"{status_emoji} **{m['title']}** - {m.get('date', '')} at {m.get('time', '')}"
+                f"{status_emoji} **{m['title']}** - {m.get('date', '')} at {m.get('time', '')}{owner_suffix}"
             ):
                 col1, col2 = st.columns(2)
                 with col1:
@@ -632,7 +717,9 @@ def render_meetings_page():
 def _render_meeting_mom_view(meeting: dict):
     """Show existing MoM linked to this meeting, with actions."""
     mom_store = st.session_state.mom_store
-    mom_data = mom_store.get_mom(meeting["mom_id"])
+    is_admin = st.session_state.get("is_admin", False)
+    mom_user = meeting.get("user_email") if is_admin else None
+    mom_data = mom_store.get_mom(meeting["mom_id"], mom_user)
     mid = meeting["id"]
 
     if not mom_data:
@@ -646,7 +733,7 @@ def _render_meeting_mom_view(meeting: dict):
         st.session_state[f"show_mom_{mid}"] = not st.session_state.get(f"show_mom_{mid}", False)
 
     if st.session_state.get(f"show_mom_{mid}", False):
-        formatted = mom_store.get_mom_formatted(meeting["mom_id"])
+        formatted = mom_store.get_mom_formatted(meeting["mom_id"], mom_user)
         if formatted:
             st.markdown(formatted)
 
@@ -845,17 +932,20 @@ def render_mom_archive_page():
     # Check if a specific MoM was selected
     selected = st.session_state.get("selected_mom", None)
 
+    is_admin = st.session_state.get("is_admin", False)
     for entry in moms:
         is_selected = selected == entry["id"]
+        mom_user = entry.get("user_email") if is_admin else None
         with st.expander(
             f"**{entry['title']}** - {entry.get('date', '')} "
-            f"({entry.get('action_item_count', 0)} action items)",
+            f"({entry.get('action_item_count', 0)} action items)"
+            + (f" — *{mom_user}*" if is_admin and mom_user else ""),
             expanded=is_selected
         ):
-            mom_data = mom_store.get_mom(entry["id"])
+            mom_data = mom_store.get_mom(entry["id"], mom_user)
             if mom_data:
                 # Display formatted MoM
-                formatted = mom_store.get_mom_formatted(entry["id"])
+                formatted = mom_store.get_mom_formatted(entry["id"], mom_user)
                 if formatted:
                     st.markdown(formatted)
 
@@ -1066,4 +1156,19 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # Streamlit must be run with "streamlit run app.py" to serve the app. If we got here via
+    # "python app.py" or the IDE Run button, relaunch with streamlit so the app actually runs.
+    try:
+        from streamlit.runtime.scriptrunner_utils.script_run_context import get_script_run_ctx
+        if get_script_run_ctx() is not None:
+            main()
+        else:
+            raise RuntimeError("not in streamlit")
+    except Exception:
+        import subprocess
+        script = Path(__file__).resolve()
+        result = subprocess.run(
+            [sys.executable, "-m", "streamlit", "run", str(script), "--server.headless", "true"],
+            cwd=str(script.parent),
+        )
+        sys.exit(result.returncode)
