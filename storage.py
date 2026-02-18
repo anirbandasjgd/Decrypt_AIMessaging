@@ -4,7 +4,7 @@ Handles meeting records, MoM storage, and search functionality.
 """
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 from config import MEETINGS_FILE, MOMS_DIR, sanitize_user_for_path
@@ -102,6 +102,52 @@ class MeetingStore:
         meeting_ids = self.data.get("threads", {}).get(thread_id, [])
         meetings = [m for m in self.meetings if m["id"] in meeting_ids]
         return sorted(meetings, key=lambda x: x.get("created_at", ""))
+
+    def _parse_meeting_datetime(self, date_str: str, time_str: str, duration_minutes: int = 0) -> Optional[tuple]:
+        """Parse meeting date/time to (start_dt, end_dt). Returns None if parse fails."""
+        if not date_str or not time_str:
+            return None
+        time_str = time_str.strip()
+        t = None
+        for fmt in ("%H:%M", "%I:%M %p", "%I:%M%p"):
+            try:
+                t = datetime.strptime(time_str, fmt).time()
+                break
+            except ValueError:
+                continue
+        if t is None:
+            return None
+        try:
+            d = datetime.strptime(date_str.strip(), "%Y-%m-%d").date()
+        except ValueError:
+            return None
+        start = datetime.combine(d, t)
+        end = start + timedelta(minutes=duration_minutes or 45)
+        return (start, end)
+
+    def get_conflicting_meetings(
+        self, date_str: str, time_str: str, duration_minutes: int, exclude_meeting_id: Optional[str] = None
+    ) -> list[dict]:
+        """Return meetings that overlap with the given slot (same user's scheduled meetings only)."""
+        slot = self._parse_meeting_datetime(date_str, time_str, duration_minutes)
+        if not slot:
+            return []
+        start_new, end_new = slot
+        conflicts = []
+        for m in self.meetings:
+            if m.get("status") == "cancelled":
+                continue
+            if exclude_meeting_id and m.get("id") == exclude_meeting_id:
+                continue
+            existing = self._parse_meeting_datetime(
+                m.get("date", ""), m.get("time", ""), m.get("duration_minutes", 45)
+            )
+            if not existing:
+                continue
+            start_ex, end_ex = existing
+            if start_new < end_ex and end_new > start_ex:
+                conflicts.append(m)
+        return conflicts
 
     def get_recent_meetings(self, limit: int = 10) -> list[dict]:
         """Get most recent meetings."""

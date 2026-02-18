@@ -410,6 +410,33 @@ class CalendarService:
             print(f"Error fetching events: {e}")
             return []
 
+    def get_conflicts_for_slot(
+        self, start_datetime: datetime, duration_minutes: int, calendar_id: str = "primary"
+    ) -> list[dict]:
+        """Return calendar events that overlap with the given time slot."""
+        events = self.get_events_on_date(start_datetime, calendar_id)
+        if not events:
+            return []
+        slot_end = start_datetime + timedelta(minutes=duration_minutes)
+        conflicts = []
+        for e in events:
+            start_s = e.get("start") or ""
+            end_s = e.get("end") or ""
+            try:
+                if "T" in start_s:
+                    ev_start = datetime.fromisoformat(start_s.replace("Z", "+00:00"))
+                else:
+                    ev_start = datetime.fromisoformat(start_s + "T00:00:00")
+                if "T" in end_s:
+                    ev_end = datetime.fromisoformat(end_s.replace("Z", "+00:00"))
+                else:
+                    ev_end = datetime.fromisoformat(end_s + "T23:59:59")
+            except (ValueError, TypeError):
+                continue
+            if start_datetime < ev_end and slot_end > ev_start:
+                conflicts.append(e)
+        return conflicts
+
 
 class MockCalendarService(CalendarService):
     """

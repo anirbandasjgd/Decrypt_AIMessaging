@@ -98,9 +98,26 @@ class MeetingManager:
             return self._handle_slot_choice(user_message)
 
         if self.state == ConversationState.AWAITING_DISAMBIGUATION:
+            # Same as COLLECTING_INFO: if user sends a complete new schedule request, restart flow
+            quick_parsed = parse_command(user_message, self.conversation_history)
+            if quick_parsed.get("intent") == "schedule_meeting":
+                md = quick_parsed.get("meeting_details") or {}
+                if bool(md.get("participants")) and (bool(md.get("date")) or bool(md.get("time")) or bool(md.get("duration_minutes"))):
+                    self.reset()
+                    return self._start_scheduling(quick_parsed)
             return self._handle_disambiguation(user_message)
 
         if self.state == ConversationState.COLLECTING_INFO:
+            # If user sends a complete new schedule request (e.g. "Schedule with Aniruddh on Jan 1st 2026 for 20 mins"),
+            # treat it as fresh to avoid reusing previous participant (caching bug).
+            quick_parsed = parse_command(user_message, self.conversation_history)
+            if quick_parsed.get("intent") == "schedule_meeting":
+                md = quick_parsed.get("meeting_details") or {}
+                has_participants = bool(md.get("participants"))
+                has_when = bool(md.get("date") or md.get("time") or md.get("duration_minutes"))
+                if has_participants and has_when:
+                    self.reset()
+                    return self._start_scheduling(quick_parsed)
             return self._handle_info_collection(user_message)
 
         # IDLE state - parse fresh command
@@ -199,6 +216,11 @@ class MeetingManager:
         # Step 2: Check for missing fields
         self.missing_fields = self._compute_missing_fields()
 
+        # When only duration is missing, use default so we can proceed (e.g. to show past-date alert)
+        if self.missing_fields == ["duration"]:
+            self.pending_meeting["duration_minutes"] = DEFAULT_MEETING_DURATION_MINUTES
+            self.missing_fields = []
+
         if self.missing_fields:
             self.state = ConversationState.COLLECTING_INFO
             question = generate_followup_question(self.missing_fields)
@@ -217,29 +239,30 @@ class MeetingManager:
 
     def _handle_info_collection(self, user_message: str) -> dict:
         """Handle responses during info collection phase."""
-        # Re-parse with context of what we're collecting
-        context_msg = (
-            f"The user is providing missing information for a meeting. "
-            f"Missing fields: {', '.join(self.missing_fields)}. "
-            f"Current meeting details: {self.pending_meeting}. "
-            f"User's response: {user_message}"
-        )
-
-        parsed = parse_command(context_msg, self.conversation_history)
+        # Parse from the user's message as primary source so we don't reuse old participants from context
+        parsed = parse_command(user_message, self.conversation_history)
         new_details = parsed.get("meeting_details", {})
 
-        # Update pending meeting with new information
-        if new_details.get("date") and "date" in self.missing_fields:
+        # Update pending meeting from extracted details (replace whenever new value is present so a full new sentence overwrites stale state)
+        if new_details.get("date"):
             self.pending_meeting["date"] = new_details["date"]
-        if new_details.get("time") and "time" in self.missing_fields:
+        if new_details.get("time"):
             self.pending_meeting["time"] = new_details["time"]
-        if new_details.get("duration_minutes") and "duration" in self.missing_fields:
+        if new_details.get("duration_minutes"):
             self.pending_meeting["duration_minutes"] = new_details["duration_minutes"]
-        if new_details.get("participants") and "participants" in self.missing_fields:
+        if new_details.get("participants"):
             self.pending_meeting["participants_raw"] = new_details["participants"]
             resolution = self._resolve_all_participants(new_details["participants"])
             self.resolved_participants = resolution["resolved"]
-        if new_details.get("title") and "title" in self.missing_fields:
+            if resolution["needs_disambiguation"]:
+                self.state = ConversationState.AWAITING_DISAMBIGUATION
+                self.disambiguation_context = resolution["disambiguation_needed"]
+                return {
+                    "message": resolution["disambiguation_message"],
+                    "action": "awaiting_input",
+                    "data": {},
+                }
+        if new_details.get("title"):
             self.pending_meeting["title"] = new_details["title"]
 
         # Also try direct parsing for simple responses
@@ -247,6 +270,9 @@ class MeetingManager:
 
         # Check if we still have missing fields
         self.missing_fields = self._compute_missing_fields()
+        if self.missing_fields == ["duration"]:
+            self.pending_meeting["duration_minutes"] = DEFAULT_MEETING_DURATION_MINUTES
+            self.missing_fields = []
 
         if self.missing_fields:
             question = generate_followup_question(self.missing_fields)
@@ -335,6 +361,9 @@ class MeetingManager:
 
         # Continue with missing fields check
         self.missing_fields = self._compute_missing_fields()
+        if self.missing_fields == ["duration"]:
+            self.pending_meeting["duration_minutes"] = DEFAULT_MEETING_DURATION_MINUTES
+            self.missing_fields = []
         if self.missing_fields:
             question = generate_followup_question(self.missing_fields)
             return {
@@ -534,7 +563,7 @@ class MeetingManager:
     # ─── Confirmation & Execution ────────────────────────────────────────
 
     def _present_confirmation(self) -> dict:
-        """Present the meeting details for user confirmation."""
+        """Present the meeting details for user confirmation and notify about conflicts."""
         self.state = ConversationState.AWAITING_CONFIRMATION
 
         # Use default duration if still missing
@@ -546,10 +575,55 @@ class MeetingManager:
             participant_names = [p["name"] for p in self.resolved_participants[:3]]
             self.pending_meeting["title"] = f"Meeting with {', '.join(participant_names)}"
 
+        date_str = self.pending_meeting.get("date", "")
+        time_str = self.pending_meeting.get("time", "")
+        duration = self.pending_meeting.get("duration_minutes", DEFAULT_MEETING_DURATION_MINUTES)
+
+        # Reject past date/time
+        slot = self.meeting_store._parse_meeting_datetime(date_str, time_str, duration)
+        if slot:
+            start_dt, _ = slot
+            if start_dt < datetime.now():
+                self.state = ConversationState.COLLECTING_INFO
+                self.pending_meeting["date"] = ""
+                self.pending_meeting["time"] = ""
+                self.missing_fields = ["date", "time"]
+                return {
+                    "message": "That date and time are in the past. Please choose a future date and time.",
+                    "action": "awaiting_input",
+                    "data": {"missing": self.missing_fields},
+                }
+        # If we couldn't parse, we'll still show confirmation and _execute_scheduling will handle parse errors
+
         msg = generate_confirmation_message(
             self.pending_meeting,
             self.resolved_participants
         )
+
+        # Check for conflicts and notify user
+        conflict_parts = []
+        store_conflicts = self.meeting_store.get_conflicting_meetings(
+            date_str, time_str, duration
+        )
+        for m in store_conflicts:
+            conflict_parts.append(
+                f"• **{m.get('title', 'Meeting')}** at {m.get('date', '')} {m.get('time', '')} ({m.get('duration_minutes', 45)} min)"
+            )
+
+        slot = slot or self.meeting_store._parse_meeting_datetime(date_str, time_str, duration)
+        if slot and hasattr(self.calendar, "get_conflicts_for_slot"):
+            start_dt, _ = slot
+            try:
+                cal_conflicts = self.calendar.get_conflicts_for_slot(start_dt, duration)
+                for e in cal_conflicts:
+                    conflict_parts.append(
+                        f"• **{e.get('title', 'Calendar event')}** (calendar)"
+                    )
+            except Exception:
+                pass
+
+        if conflict_parts:
+            msg += "\n\n⚠️ **Schedule conflict:** You already have the following at this time:\n" + "\n".join(conflict_parts)
 
         return {
             "message": msg,
@@ -563,12 +637,20 @@ class MeetingManager:
         time_str = self.pending_meeting.get("time", "")
         duration = self.pending_meeting.get("duration_minutes", DEFAULT_MEETING_DURATION_MINUTES)
 
-        try:
-            meeting_dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
-        except ValueError:
+        slot = self.meeting_store._parse_meeting_datetime(date_str, time_str, duration)
+        if not slot:
             self.reset()
             return {
                 "message": "Sorry, there was an error parsing the date/time. Please try again.",
+                "action": "error",
+                "data": {}
+            }
+        meeting_dt, _ = slot
+
+        if meeting_dt < datetime.now():
+            self.reset()
+            return {
+                "message": "That date and time are in the past. Please choose a future date and time.",
                 "action": "error",
                 "data": {}
             }
