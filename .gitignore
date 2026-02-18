@@ -5,6 +5,7 @@
 # Google OAuth credentials & tokens
 credentials/token.json
 credentials/credentials.json
+credentials/client_secret*.json
 
 # Python
 .venv/

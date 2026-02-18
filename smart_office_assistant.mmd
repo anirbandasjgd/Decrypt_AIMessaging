@@ -1,0 +1,277 @@
+%%{init: {
+  "theme": "base",
+  "themeVariables": {
+    "primaryColor": "#4A90D9",
+    "primaryTextColor": "#fff",
+    "primaryBorderColor": "#2C6FB5",
+    "lineColor": "#555",
+    "secondaryColor": "#F5A623",
+    "tertiaryColor": "#E8F5E9"
+  },
+  "flowchart": { "curve": "basis", "padding": 12 }
+}}%%
+
+flowchart TB
+
+%% ═══════════════════════════════════════════
+%% USER ENTRY
+%% ═══════════════════════════════════════════
+    User([fa:fa-user User])
+
+%% ═══════════════════════════════════════════
+%% AUTHENTICATION LAYER
+%% ═══════════════════════════════════════════
+    subgraph AUTH["Authentication Layer"]
+        direction LR
+        LoginScreen[Login Screen\nemail + password]
+        AuthModule[auth.py\nverify_user]
+        LoginJSON[(login.json\nuser credentials)]
+        LoginScreen -->|verify| AuthModule
+        AuthModule -->|read/write| LoginJSON
+    end
+
+    User -->|launch app| AUTH
+    AUTH -->|session: user_email,\nis_admin| SessionState[Streamlit\nSession State]
+
+%% ═══════════════════════════════════════════
+%% PRESENTATION LAYER — UI PAGES
+%% ═══════════════════════════════════════════
+    subgraph UI["Streamlit UI — app.py"]
+        direction LR
+        ChatPage["Chat Page\ntext + voice input\nquick actions"]
+        AddrPage["Address Book\ncontacts CRUD\ndepartment view"]
+        MeetingsPage["Meetings Page\nlist / cancel / delete\nupload recording"]
+        MoMArchive["MoM Archive\nsearch / view\nemail / audio summary"]
+        SettingsPage["Settings\nGoogle Calendar\nemail config"]
+    end
+
+    SessionState --> UI
+
+%% ═══════════════════════════════════════════
+%% VOICE INPUT
+%% ═══════════════════════════════════════════
+    subgraph VOICE["Voice Input"]
+        direction LR
+        AudioRecorder[audio-recorder-streamlit\nbrowser microphone]
+        WhisperSTT[OpenAI Whisper\nmodel: whisper-1]
+        AudioRecorder -->|audio bytes| WhisperSTT
+        WhisperSTT -->|transcribed text| VoiceOut([text for chat])
+    end
+
+    ChatPage -->|record voice| VOICE
+    VoiceOut --> ChatInput([User message])
+
+%% ═══════════════════════════════════════════
+%% NLU ENGINE
+%% ═══════════════════════════════════════════
+    subgraph NLU["Natural Language Understanding — nlu_engine.py"]
+        direction TB
+        ParseCmd[parse_command\nsystem prompt + history\nOpenAI function calling]
+        IntentRouter{Extracted Intent}
+        ParseCmd --> IntentRouter
+        IntentRouter -->|schedule_meeting| SI[Schedule Intent\nparticipants, date,\ntime, duration]
+        IntentRouter -->|reschedule_meeting| RI[Reschedule Intent\nmeeting ref, new date/time]
+        IntentRouter -->|cancel_meeting| CI[Cancel Intent\nmeeting reference]
+        IntentRouter -->|list_meetings| LI[List Intent]
+        IntentRouter -->|search_mom| SMI[Search MoM\nsearch_query]
+        IntentRouter -->|followup_meeting| FI[Follow-up Intent\nparent meeting ref]
+        IntentRouter -->|manage_contacts| MCI[Contacts Intent]
+        IntentRouter -->|general_chat| GC[General Chat\nresponse_message]
+        FollowUp[generate_followup_question\ncombine missing fields\ninto natural question]
+        ConfClassify[classify_confirmation\npattern match + GPT\nconfirmed / cancelled / modification]
+    end
+
+    ChatPage -->|text input| ChatInput
+    ChatInput -->|user message| NLU
+
+%% ═══════════════════════════════════════════
+%% MEETING MANAGER — CONVERSATION STATE MACHINE
+%% ═══════════════════════════════════════════
+    subgraph MM["Meeting Manager — meeting_manager.py"]
+        direction TB
+        IDLE((IDLE))
+        COLLECTING[COLLECTING_INFO\nmissing fields]
+        DISAMBIG[AWAITING_DISAMBIGUATION\nambiguous participant]
+        SLOT_CHOICE[AWAITING_SLOT_CHOICE\nfirst-available search]
+        CONFIRM[AWAITING_CONFIRMATION\nuser confirms / modifies]
+        EXECUTE[Execute Scheduling\nparse datetime\nget emails\ncreate event\nstore meeting\nsend invites]
+
+        IDLE -->|schedule intent,\nmissing fields| COLLECTING
+        IDLE -->|ambiguous name| DISAMBIG
+        IDLE -->|first-available flag| SLOT_CHOICE
+        IDLE -->|all fields present| CONFIRM
+        COLLECTING -->|fields gathered| CONFIRM
+        COLLECTING -->|first-available| SLOT_CHOICE
+        DISAMBIG -->|resolved| COLLECTING
+        DISAMBIG -->|resolved, complete| CONFIRM
+        SLOT_CHOICE -->|slot selected| CONFIRM
+        CONFIRM -->|"confirmed"| EXECUTE
+        CONFIRM -->|"modification"| COLLECTING
+        CONFIRM -->|"cancelled"| IDLE
+        EXECUTE -->|done| IDLE
+    end
+
+    NLU -->|intent + entities| MM
+    MM -->|follow-up question| FollowUp
+    MM -->|user reply| ConfClassify
+
+%% ═══════════════════════════════════════════
+%% ADDRESS BOOK
+%% ═══════════════════════════════════════════
+    subgraph AB["Address Book — address_book.py"]
+        direction LR
+        ABSearch[find_by_name\nfind_by_department\nresolve_participant]
+        ABCRUD[add / update /\ndelete contact]
+        ABFile[(address_book_\nuser_email.json)]
+        ABSearch -->|read| ABFile
+        ABCRUD -->|read/write| ABFile
+    end
+
+    AddrPage -->|manage contacts| AB
+    MM -->|resolve_participant\nget_emails_for_contacts| AB
+
+%% ═══════════════════════════════════════════
+%% GOOGLE CALENDAR SERVICE
+%% ═══════════════════════════════════════════
+    subgraph CAL["Calendar Service — calendar_service.py"]
+        direction TB
+        CalAuth[OAuth 2.0 Authentication\ncredentials.json → token.json]
+        CalCreate[create_event\nattendees + Google Meet\nconferenceData]
+        CalAvail[check_availability\nfreebusy API\n9 AM–6 PM slots]
+        CalUpdate[update_event\nupdate_event_attendees]
+        MockCal[MockCalendarService\nin-memory simulation]
+
+        CalAuth -->|authenticated| CalCreate
+        CalAuth -->|authenticated| CalAvail
+        CalAuth -->|authenticated| CalUpdate
+        CalAuth -->|no credentials| MockCal
+    end
+
+    MM -->|create_event| CAL
+    MM -->|check_availability\nfind_first_available_slot| CAL
+    SLOT_CHOICE -->|query slots| CAL
+
+%% ═══════════════════════════════════════════
+%% TRANSCRIPTION SERVICE
+%% ═══════════════════════════════════════════
+    subgraph TRANS["Transcription Service — transcription_service.py"]
+        direction TB
+        ValidateFile[Validate format\nmp3, wav, mp4, m4a, etc.\nMax 25 MB]
+        CallWhisper[OpenAI Whisper API\nmodel: whisper-1]
+        TransResult([transcript text\n+ duration + language])
+        ValidateFile -->|valid| CallWhisper
+        CallWhisper --> TransResult
+    end
+
+    MeetingsPage -->|upload audio/video| TRANS
+
+%% ═══════════════════════════════════════════
+%% MoM GENERATOR
+%% ═══════════════════════════════════════════
+    subgraph MOMGEN["MoM Generator — mom_generator.py"]
+        direction TB
+        BuildCtx[Build context:\ntranscript + title\n+ attendees + date]
+        GPTExtract[OpenAI GPT\nfunction calling:\ngenerate_mom tool]
+        MoMResult([Structured MoM:\ntitle, summary,\ndiscussion points,\ndecisions, action items])
+        FormatMD[generate_mom_content_text\nMarkdown output]
+        ExtractAI[extract_action_items_summary\ntext for TTS]
+
+        BuildCtx --> GPTExtract
+        GPTExtract --> MoMResult
+        MoMResult --> FormatMD
+        MoMResult --> ExtractAI
+    end
+
+    TRANS -->|transcript| MOMGEN
+
+%% ═══════════════════════════════════════════
+%% COMMUNICATION — TTS & EMAIL
+%% ═══════════════════════════════════════════
+    subgraph COMMS["Communication — communication.py"]
+        direction TB
+        TTS[generate_tts_summary\nOpenAI TTS API\nmodel: tts-1, voice: alloy]
+        TTSFile([audio_output/*.mp3])
+        EmailSend[send_email\nMIMEMultipart\nHTML + text + attachments]
+        MoMEmail[send_mom_email\nformatted MoM + audio]
+        InviteEmail[send_meeting_invite\ncalendar + Meet links]
+
+        TTS --> TTSFile
+        TTSFile -.->|optional attach| MoMEmail
+        EmailSend --- MoMEmail
+        EmailSend --- InviteEmail
+    end
+
+    MOMGEN -->|action items text| COMMS
+    MoMArchive -->|email MoM / play audio| COMMS
+    MM -->|send invite emails| COMMS
+
+%% ═══════════════════════════════════════════
+%% STORAGE LAYER
+%% ═══════════════════════════════════════════
+    subgraph STORE["Persistent Storage — storage.py"]
+        direction TB
+        MtgStore[MeetingStore\nadd / update / cancel\ndelete / search\nthread tracking]
+        MoMStore[MoMStore\nstore / get / search\nper-user directories]
+        MtgJSON[(meetings.json\nmeetings array\nthreads map)]
+        MoMJSON[(moms/user/\nmom_id.json\n+ index.json)]
+        ChatJSON[(chat_user.json\nmessage history)]
+
+        MtgStore -->|read/write| MtgJSON
+        MoMStore -->|read/write| MoMJSON
+    end
+
+    EXECUTE -->|add_meeting| MtgStore
+    MOMGEN -->|store_mom| MoMStore
+    MoMStore -->|link mom_id| MtgStore
+    MeetingsPage -->|cancel / delete| MtgStore
+    MoMArchive -->|search / get| MoMStore
+    ChatPage -->|save/load history| ChatJSON
+
+%% ═══════════════════════════════════════════
+%% EXTERNAL SERVICES
+%% ═══════════════════════════════════════════
+    subgraph EXT["External APIs & Services"]
+        direction LR
+        OpenAI[(OpenAI API\nGPT-4o-mini\nWhisper\nTTS)]
+        GCalAPI[(Google Calendar\nAPI v3\nOAuth 2.0)]
+        SMTPSvc[(SMTP Server\nEmail delivery)]
+    end
+
+    NLU -->|GPT function calling\ntemp 0.1| OpenAI
+    TRANS -->|Whisper STT| OpenAI
+    MOMGEN -->|GPT function calling| OpenAI
+    COMMS -->|TTS API| OpenAI
+    CAL -->|events / freebusy| GCalAPI
+    COMMS -->|SMTP + TLS| SMTPSvc
+
+%% ═══════════════════════════════════════════
+%% CONFIGURATION
+%% ═══════════════════════════════════════════
+    subgraph CONFIG["Configuration — config.py + .env"]
+        direction LR
+        EnvFile[.env\nOPENAI_API_KEY\nSMTP credentials\nGoogle paths]
+        ConfigPy[config.py\nPaths, models,\ndefaults, limits]
+    end
+
+    CONFIG -.->|loaded at startup| UI
+    CONFIG -.->|API keys, paths| EXT
+    CONFIG -.->|file paths| STORE
+
+%% ═══════════════════════════════════════════
+%% STYLES
+%% ═══════════════════════════════════════════
+    classDef userNode fill:#2196F3,stroke:#1565C0,color:#fff,stroke-width:2px
+    classDef uiNode fill:#4CAF50,stroke:#2E7D32,color:#fff
+    classDef aiNode fill:#FF9800,stroke:#E65100,color:#fff
+    classDef storageNode fill:#9C27B0,stroke:#6A1B9A,color:#fff
+    classDef extNode fill:#F44336,stroke:#C62828,color:#fff
+    classDef stateNode fill:#00BCD4,stroke:#00838F,color:#fff
+    classDef configNode fill:#607D8B,stroke:#37474F,color:#fff
+
+    class User userNode
+    class ChatPage,AddrPage,MeetingsPage,MoMArchive,SettingsPage,LoginScreen uiNode
+    class ParseCmd,IntentRouter,FollowUp,ConfClassify,CallWhisper,GPTExtract,TTS aiNode
+    class MtgStore,MoMStore,MtgJSON,MoMJSON,ChatJSON,ABFile,LoginJSON storageNode
+    class OpenAI,GCalAPI,SMTPSvc extNode
+    class IDLE,COLLECTING,DISAMBIG,SLOT_CHOICE,CONFIRM,EXECUTE stateNode
+    class EnvFile,ConfigPy configNode
