@@ -210,7 +210,7 @@ def init_session_state():
 
     # Initialize service objects (per-user when user_email is set)
     if st.session_state.address_book is None:
-        st.session_state.address_book = AddressBook(user_email=user_email)
+        st.session_state.address_book = AddressBook(user_email=user_email, is_admin=is_admin)
 
     if st.session_state.meeting_store is None:
         st.session_state.meeting_store = MeetingStore(user_email=user_email, is_admin=is_admin)

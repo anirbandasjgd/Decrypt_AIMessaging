@@ -72,8 +72,10 @@ def sanitize_user_for_path(email: str) -> str:
     return email.strip().replace("@", "_at_").replace(".", "_")
 
 
-def get_address_book_path_for_user(email: str) -> Path:
-    """Get the address book JSON path for a given user."""
+def get_address_book_path_for_user(email: str, is_admin: bool = False) -> Path:
+    """Get the address book JSON path for a given user. Admin uses the full org address book."""
+    if is_admin:
+        return ADDRESS_BOOK_FILE  # Full organization address book
     return DATA_DIR / f"address_book_{sanitize_user_for_path(email)}.json"
 
 
