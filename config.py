@@ -53,11 +53,15 @@ WORKING_HOURS_START = 9   # 9 AM
 WORKING_HOURS_END = 18    # 6 PM
 SLOT_INCREMENT_MINUTES = 30  # Check availability every 30 min
 
+# Calendar timezone for scheduling (user's local time). Set in .env as CALENDAR_TIMEZONE.
+# Examples: America/Los_Angeles, America/New_York, Europe/London, Asia/Kolkata
+CALENDAR_TIMEZONE = os.getenv("CALENDAR_TIMEZONE", "America/New_York")
+
 # ─── Email (SMTP) ────────────────────────────────────────────────────────────
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_EMAIL = os.getenv("SMTP_EMAIL", "")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")  # App-specific password for Gmail
+SMTP_EMAIL = os.getenv("SMTP_EMAIL", "nitinsood1976@gmail.com")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")  # Gmail: use App Password from .env
 
 # ─── Data Files ──────────────────────────────────────────────────────────────
 LOGIN_FILE = DATA_DIR / "login.json"

@@ -605,6 +605,25 @@ def render_meetings_page():
 
     ms = st.session_state.meeting_store
 
+    # Process deferred cancel from previous run (so cancel runs before rendering list)
+    pending_cancel_id = st.session_state.pop("_cancel_meeting_id", None)
+    if pending_cancel_id:
+        meeting_to_cancel = ms.get_meeting(pending_cancel_id)
+        if meeting_to_cancel:
+            updated = ms.cancel_meeting(pending_cancel_id)
+            if updated:
+                event_id = (meeting_to_cancel.get("calendar_event_id") or "").strip()
+                if event_id and not str(event_id).lower().startswith("mock_"):
+                    cal = st.session_state.calendar_service
+                    if cal and getattr(cal, "is_authenticated", lambda: False)():
+                        del_result = cal.delete_event(event_id, send_notifications=True)
+                        if not del_result.get("success"):
+                            st.warning(f"Meeting marked cancelled. Calendar could not be updated: {del_result.get('error', '')}")
+                st.success(f"Meeting **{meeting_to_cancel.get('title', '')}** has been cancelled.")
+            else:
+                st.error("Could not cancel meeting (permission denied).")
+        st.rerun()
+
     tab1, tab2 = st.tabs(["All Meetings", "Meeting Threads"])
 
     with tab1:
@@ -646,8 +665,7 @@ def render_meetings_page():
                     act_col1, act_col2, act_col3 = st.columns([1, 1, 4])
                     with act_col1:
                         if st.button("Cancel Meeting", key=f"cancel_{m['id']}"):
-                            ms.cancel_meeting(m["id"])
-                            st.success(f"Meeting **{m['title']}** has been cancelled.")
+                            st.session_state["_cancel_meeting_id"] = m["id"]
                             st.rerun()
                     with act_col2:
                         if st.button("Delete Meeting", key=f"delete_{m['id']}"):

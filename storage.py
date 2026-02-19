@@ -170,13 +170,15 @@ class MeetingStore:
         return results
 
     def _can_modify_meeting(self, meeting: dict) -> bool:
-        """Check if current user can modify this meeting."""
-        return self.is_admin or meeting.get("user_email") == self.user_email
+        """Check if current user can modify this meeting. Admin can modify any; legacy (no user_email) editable by admin."""
+        if self.is_admin:
+            return True
+        return meeting.get("user_email") == self.user_email
 
     def update_meeting(self, meeting_id: str, **kwargs) -> Optional[dict]:
         """Update a meeting record (only own meetings unless admin)."""
-        for m in self.data["meetings"]:
-            if m["id"] == meeting_id:
+        for m in self.data.get("meetings", []):
+            if m.get("id") == meeting_id:
                 if not self._can_modify_meeting(m):
                     return None
                 m.update(kwargs)
@@ -335,22 +337,33 @@ class MoMStore:
         )
 
     def search_moms(self, query: str) -> list[dict]:
-        """Search MoMs by title, attendees, or content."""
-        q = query.lower()
+        """Search MoMs by title, attendees, summary, discussion points, decisions, content, and action items."""
+        q = (query or "").strip().lower()
+        if not q:
+            return self.get_all_moms()
         results = []
         for entry in self.index.get("moms", []):
             if (q in entry.get("title", "").lower() or
-                any(q in a.lower() for a in entry.get("attendees", []))):
+                any(q in (a or "").lower() for a in entry.get("attendees", []))):
                 results.append(entry)
                 continue
 
-            # Search full content
-            mom = self.get_mom(entry["id"])
-            if mom and (q in mom.get("content", "").lower() or
-                        any(q in ai.get("description", "").lower()
-                            for ai in mom.get("action_items", []))):
+            # Search full MoM body: summary, key_discussion_points, decisions, content, action_items
+            mom_user = entry.get("user_email") if self.is_admin else None
+            mom = self.get_mom(entry["id"], mom_user)
+            if not mom:
+                continue
+            searchable_parts = [
+                mom.get("summary", ""),
+                mom.get("content", ""),
+            ]
+            searchable_parts.extend(mom.get("key_discussion_points", []))
+            searchable_parts.extend(mom.get("decisions", []))
+            for ai in mom.get("action_items", []):
+                searchable_parts.append(ai.get("description", ""))
+            searchable_text = " ".join(str(p) for p in searchable_parts).lower()
+            if q in searchable_text:
                 results.append(entry)
-
         return results
 
     def get_mom_formatted(self, mom_id: str, user_email: Optional[str] = None) -> Optional[str]:

@@ -7,11 +7,12 @@ import json
 from datetime import datetime, timedelta
 from typing import Optional
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from config import (
     GOOGLE_CREDENTIALS_FILE, GOOGLE_TOKEN_FILE, GOOGLE_SCOPES,
     WORKING_HOURS_START, WORKING_HOURS_END, SLOT_INCREMENT_MINUTES,
-    DEFAULT_MEETING_DURATION_MINUTES
+    DEFAULT_MEETING_DURATION_MINUTES, CALENDAR_TIMEZONE,
 )
 
 # Google API imports (graceful if not installed)
@@ -130,11 +131,11 @@ class CalendarService:
             "description": description,
             "start": {
                 "dateTime": start_datetime.isoformat(),
-                "timeZone": "Asia/Kolkata",  # IST
+                "timeZone": CALENDAR_TIMEZONE,
             },
             "end": {
                 "dateTime": end_datetime.isoformat(),
-                "timeZone": "Asia/Kolkata",
+                "timeZone": CALENDAR_TIMEZONE,
             },
             "reminders": {
                 "useDefault": False,
@@ -198,11 +199,11 @@ class CalendarService:
         body = {
             "start": {
                 "dateTime": start_datetime.isoformat(),
-                "timeZone": "Asia/Kolkata",
+                "timeZone": CALENDAR_TIMEZONE,
             },
             "end": {
                 "dateTime": end_datetime.isoformat(),
-                "timeZone": "Asia/Kolkata",
+                "timeZone": CALENDAR_TIMEZONE,
             },
         }
 
@@ -227,6 +228,32 @@ class CalendarService:
             return {"success": False, "error": f"Calendar API error: {str(e)}"}
         except Exception as e:
             return {"success": False, "error": f"Failed to update event: {str(e)}"}
+
+    def delete_event(
+        self,
+        event_id: str,
+        calendar_id: str = "primary",
+        send_notifications: bool = True,
+    ) -> dict:
+        """
+        Delete an event from Google Calendar.
+        Sends cancellation notices to attendees when send_notifications is True.
+        """
+        if not self.is_authenticated():
+            return {"success": False, "error": "Not authenticated with Google Calendar"}
+        if not event_id or str(event_id).strip().lower().startswith("mock_"):
+            return {"success": False, "error": "Invalid or mock event id"}
+        try:
+            self.service.events().delete(
+                calendarId=calendar_id,
+                eventId=event_id,
+                sendUpdates="all" if send_notifications else "none",
+            ).execute()
+            return {"success": True}
+        except HttpError as e:
+            return {"success": False, "error": f"Calendar API error: {str(e)}"}
+        except Exception as e:
+            return {"success": False, "error": f"Failed to delete event: {str(e)}"}
 
     def update_event_attendees(
         self,
@@ -278,20 +305,23 @@ class CalendarService:
         if not self.is_authenticated():
             return []
 
-        # Define the time range (working hours)
-        day_start = date.replace(
+        # Define the time range (working hours) in the configured timezone
+        tz = ZoneInfo(CALENDAR_TIMEZONE)
+        day_start_naive = date.replace(
             hour=WORKING_HOURS_START, minute=0, second=0, microsecond=0
         )
-        day_end = date.replace(
+        day_end_naive = date.replace(
             hour=WORKING_HOURS_END, minute=0, second=0, microsecond=0
         )
+        day_start = day_start_naive.replace(tzinfo=tz)
+        day_end = day_end_naive.replace(tzinfo=tz)
 
         try:
             # Get busy times using freebusy API
             body = {
-                "timeMin": day_start.isoformat() + "+05:30",
-                "timeMax": day_end.isoformat() + "+05:30",
-                "timeZone": "Asia/Kolkata",
+                "timeMin": day_start.isoformat(),
+                "timeMax": day_end.isoformat(),
+                "timeZone": CALENDAR_TIMEZONE,
                 "items": [{"id": calendar_id}],
             }
 
@@ -307,8 +337,8 @@ class CalendarService:
 
             # Find available slots
             available_slots = []
-            current_time = day_start
-            while current_time + timedelta(minutes=duration_minutes) <= day_end:
+            current_time = day_start_naive
+            while current_time + timedelta(minutes=duration_minutes) <= day_end_naive:
                 slot_end = current_time + timedelta(minutes=duration_minutes)
 
                 # Check if slot overlaps with any busy period
@@ -384,13 +414,14 @@ class CalendarService:
             return []
 
         try:
-            day_start = date.replace(hour=0, minute=0, second=0).isoformat() + "+05:30"
-            day_end = date.replace(hour=23, minute=59, second=59).isoformat() + "+05:30"
+            tz = ZoneInfo(CALENDAR_TIMEZONE)
+            day_start = date.replace(hour=0, minute=0, second=0, microsecond=0).replace(tzinfo=tz)
+            day_end = date.replace(hour=23, minute=59, second=59, microsecond=999999).replace(tzinfo=tz)
 
             events_result = self.service.events().list(
                 calendarId=calendar_id,
-                timeMin=day_start,
-                timeMax=day_end,
+                timeMin=day_start.isoformat(),
+                timeMax=day_end.isoformat(),
                 singleEvents=True,
                 orderBy="startTime",
             ).execute()
@@ -506,6 +537,14 @@ class MockCalendarService(CalendarService):
                     "start": start_datetime.isoformat(),
                     "end": end_datetime.isoformat(),
                 }
+        return {"success": False, "error": "Event not found"}
+
+    def delete_event(self, event_id: str, calendar_id="primary", send_notifications=True) -> dict:
+        """Remove event from mock calendar."""
+        for i, event in enumerate(self.events):
+            if event.get("id") == event_id:
+                self.events.pop(i)
+                return {"success": True}
         return {"success": False, "error": "Event not found"}
 
     def update_event_attendees(self, event_id: str, attendee_emails: list,
