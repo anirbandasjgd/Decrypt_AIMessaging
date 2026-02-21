@@ -12,7 +12,7 @@ from pathlib import Path
 # Ensure the smart_office_assistant directory is on the path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from config import APP_TITLE, APP_ICON, GOOGLE_CREDENTIALS_FILE, DEBUG_LOGGING, get_chat_history_path_for_user
+from config import APP_TITLE, APP_ICON, GOOGLE_CREDENTIALS_FILE, DEBUG_LOGGING, get_chat_history_path_for_user, get_meeting_app_link, RECORDINGS_DIR
 import config as config_module
 from auth import verify_user, load_login_data, ensure_login_file
 from address_book import AddressBook
@@ -256,6 +256,13 @@ if "debug_logging_checkbox" in st.session_state:
 if st.session_state.get("_goto_page"):
     _target = st.session_state.pop("_goto_page")
     st.session_state["nav_radio"] = _target
+
+# Handle deep-link query params (e.g. ?page=Meetings&meeting_id=mtg_xxx)
+_qp = st.query_params
+if _qp.get("page"):
+    st.session_state["nav_radio"] = _qp["page"]
+if _qp.get("meeting_id"):
+    st.session_state["_active_meeting_id"] = _qp["meeting_id"]
 
 
 # ─── Sidebar ─────────────────────────────────────────────────────────────────
@@ -635,13 +642,17 @@ def render_meetings_page():
             return
 
         show_owner = st.session_state.get("is_admin", False)
+        active_mid = st.session_state.get("_active_meeting_id")
         for m in meetings:
             status_emoji = {"scheduled": "📅", "completed": "✅", "cancelled": "❌"}.get(
                 m.get("status", "scheduled"), "📅"
             )
             owner_suffix = f" — *{m.get('user_email', '')}*" if show_owner and m.get("user_email") else ""
+            followup_badge = " 🔗" if m.get("parent_meeting_id") else ""
+            st.markdown(f'<div id="meeting-{m["id"]}"></div>', unsafe_allow_html=True)
             with st.expander(
-                f"{status_emoji} **{m['title']}** - {m.get('date', '')} at {m.get('time', '')}{owner_suffix}"
+                f"{status_emoji} **{m['title']}**{followup_badge} - {m.get('date', '')} at {m.get('time', '')}{owner_suffix}",
+                expanded=(active_mid == m["id"]),
             ):
                 col1, col2 = st.columns(2)
                 with col1:
@@ -657,8 +668,49 @@ def render_meetings_page():
                 if m.get("participants"):
                     st.write(f"**Participants:** {', '.join(m['participants'])}")
 
+                # ── Follow-up / Thread lineage ──
+                parent_id = m.get("parent_meeting_id")
+                if parent_id:
+                    parent = ms.get_meeting(parent_id)
+                    if parent:
+                        pcol1, pcol2 = st.columns([5, 1])
+                        with pcol1:
+                            st.info(
+                                f"🔗 **Follow-up to:** {parent.get('title', 'Unknown')} "
+                                f"({parent.get('date', '')} at {parent.get('time', '')})"
+                            )
+                        with pcol2:
+                            if st.button("Go to original", key=f"goto_parent_{m['id']}"):
+                                st.session_state["_active_meeting_id"] = parent["id"]
+                                st.rerun()
+                # Show any follow-ups linked TO this meeting
+                followups = [
+                    om for om in ms.meetings
+                    if om.get("parent_meeting_id") == m["id"]
+                ]
+                if followups:
+                    fu_parts = []
+                    for f in followups:
+                        fu_parts.append(
+                            f"{f.get('title', 'Untitled')} ({f.get('date', '')})"
+                        )
+                    st.success(f"📎 **Has follow-up(s):** {', '.join(fu_parts)}")
+                    for f in followups:
+                        if st.button(
+                            f"Go to: {f.get('title', 'Untitled')}",
+                            key=f"goto_followup_{m['id']}_{f['id']}",
+                        ):
+                            st.session_state["_active_meeting_id"] = f["id"]
+                            st.rerun()
+
                 if m.get("description"):
                     st.write(f"**Description:** {m['description']}")
+
+                # ── Recording player ──
+                rec_path = m.get("recording_path", "")
+                if rec_path and os.path.exists(rec_path):
+                    st.markdown("**Recording:**")
+                    st.audio(rec_path)
 
                 # ── Cancel / Delete actions ──
                 if m.get("status") != "cancelled":
@@ -713,22 +765,46 @@ def render_meetings_page():
                 else:
                     _render_meeting_upload_section(m)
 
+        if active_mid:
+            import streamlit.components.v1 as components
+            components.html(
+                f"""<script>
+                var target = window.parent.document.getElementById("meeting-{active_mid}");
+                if (target) {{ target.scrollIntoView({{behavior: "smooth", block: "start"}}); }}
+                </script>""",
+                height=0,
+            )
+
     with tab2:
         threads = ms.data.get("threads", {})
-        if not threads:
-            st.info("No meeting threads yet.")
+        # Only show threads with more than one meeting (i.e. actual chains)
+        multi_threads = {
+            tid: mids for tid, mids in threads.items()
+            if len(mids) > 1
+        }
+        if not multi_threads:
+            st.info("No meeting threads yet. Schedule a follow-up meeting to create one!")
             return
 
-        for thread_id, meeting_ids in threads.items():
+        for thread_id, meeting_ids in multi_threads.items():
             thread_meetings = ms.get_thread_meetings(thread_id)
             if thread_meetings:
                 first_title = thread_meetings[0].get("title", "Untitled Thread")
-                with st.expander(f"Thread: {first_title} ({len(thread_meetings)} meetings)"):
+                with st.expander(f"🧵 Thread: {first_title} ({len(thread_meetings)} meetings)"):
                     for i, tm in enumerate(thread_meetings):
-                        prefix = "└─" if i == len(thread_meetings) - 1 else "├─"
+                        is_original = tm.get("parent_meeting_id") is None
+                        label = "Original" if is_original else "Follow-up"
+                        icon = "🟢" if is_original else "🔗"
+                        if i == 0:
+                            prefix = "┌─"
+                        elif i == len(thread_meetings) - 1:
+                            prefix = "└─"
+                        else:
+                            prefix = "├─"
+                        status = tm.get("status", "scheduled").title()
                         st.markdown(
-                            f"{prefix} **{tm['title']}** - {tm.get('date', '')} "
-                            f"at {tm.get('time', '')} ({tm.get('status', 'scheduled')})"
+                            f"{prefix} {icon} **{tm['title']}** — {tm.get('date', '')} "
+                            f"at {tm.get('time', '')} · *{label}* · {status}"
                         )
 
 
@@ -851,6 +927,14 @@ def _render_meeting_upload_section(meeting: dict):
             st.error(result.get("error", "Transcription failed"))
             return
 
+        # Save the recording permanently
+        ext = Path(uploaded_file.name).suffix or ".mp3"
+        recording_filename = f"{mid}{ext}"
+        recording_path = RECORDINGS_DIR / recording_filename
+        recording_path.write_bytes(file_data)
+        ms = st.session_state.meeting_store
+        ms.update_meeting(mid, recording_path=str(recording_path))
+
         transcript = result["transcript"]
         st.success(
             f"Transcription complete! "
@@ -899,8 +983,11 @@ def _render_meeting_upload_section(meeting: dict):
             if audio_result.get("success"):
                 st.audio(audio_result["filepath"])
 
-        # Clean up upload state
+        # Clean up upload state and rerun so the MoM view (with Email to Attendees) appears
         st.session_state[upload_key] = False
+        st.session_state["_active_meeting_id"] = mid
+        st.session_state[f"show_mom_{mid}"] = True
+        st.rerun()
 
 
 def _email_mom_for_meeting(mom_data: dict, meeting: dict):
@@ -919,7 +1006,13 @@ def _email_mom_for_meeting(mom_data: dict, meeting: dict):
         return
 
     with st.spinner(f"Sending MoM to {len(email_list)} attendee(s)..."):
-        result = send_mom_email(email_list, mom_data)
+        app_link = get_meeting_app_link(meeting["id"])
+        rec_path = meeting.get("recording_path", "")
+        result = send_mom_email(
+            email_list, mom_data,
+            meeting_app_link=app_link,
+            has_recording=bool(rec_path and os.path.exists(rec_path)),
+        )
         if result.get("success"):
             st.success(f"Email sent to: {', '.join(email_list)}")
         else:
@@ -1013,7 +1106,19 @@ def render_mom_archive_page():
                                         if c.get("email"):
                                             email_list.append(c["email"])
                                 if email_list:
-                                    result = send_mom_email(email_list, mom_data)
+                                    mtg_id = entry.get("meeting_id") or mom_data.get("meeting_id", "")
+                                    app_link = get_meeting_app_link(mtg_id) if mtg_id else ""
+                                    has_rec = False
+                                    if mtg_id:
+                                        mtg_rec = st.session_state.meeting_store.get_meeting(mtg_id)
+                                        if mtg_rec:
+                                            rp = mtg_rec.get("recording_path", "")
+                                            has_rec = bool(rp and os.path.exists(rp))
+                                    result = send_mom_email(
+                                        email_list, mom_data,
+                                        meeting_app_link=app_link,
+                                        has_recording=has_rec,
+                                    )
                                     if result.get("success"):
                                         st.success("Email sent!")
                                     else:
@@ -1169,6 +1274,8 @@ def main():
     render_sidebar()
     # Use nav_radio (sidebar selection) as source of truth so Address Book / Meetings etc. always load
     current = st.session_state.get("nav_radio") or st.session_state.get("current_page", "Chat")
+    if current != "Meetings":
+        st.session_state.pop("_active_meeting_id", None)
     page_func = PAGE_MAP.get(current, render_chat_page)
     page_func()
 

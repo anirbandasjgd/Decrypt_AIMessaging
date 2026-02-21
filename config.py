@@ -15,9 +15,10 @@ DATA_DIR = BASE_DIR / "data"
 MOMS_DIR = DATA_DIR / "moms"
 CREDENTIALS_DIR = BASE_DIR / "credentials"
 AUDIO_OUTPUT_DIR = BASE_DIR / "audio_output"
+RECORDINGS_DIR = BASE_DIR / "recordings"
 
 # Ensure directories exist
-for d in [DATA_DIR, MOMS_DIR, CREDENTIALS_DIR, AUDIO_OUTPUT_DIR]:
+for d in [DATA_DIR, MOMS_DIR, CREDENTIALS_DIR, AUDIO_OUTPUT_DIR, RECORDINGS_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 # ─── OpenAI ──────────────────────────────────────────────────────────────────
@@ -91,6 +92,12 @@ def get_chat_history_path_for_user(email: str) -> Path:
 APP_TITLE = "Smart Office Assistant"
 APP_ICON = "🏢"
 MAX_AUDIO_FILE_SIZE_MB = 25  # OpenAI Whisper limit
+APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:8501")
+
+
+def get_meeting_app_link(meeting_id: str) -> str:
+    """Build a direct URL to open a specific meeting in the app."""
+    return f"{APP_BASE_URL}/?page=Meetings&meeting_id={meeting_id}"
 
 # ─── Debug ────────────────────────────────────────────────────────────────────
 # Set DEBUG_LOGGING=true in .env to print debug messages to stdout (use debug_log() anywhere in the app)

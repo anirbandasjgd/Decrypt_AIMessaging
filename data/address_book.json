@@ -126,6 +126,14 @@
       "department": "Tech",
       "role": "QA Engineer",
       "phone": "+91-9876543224"
+    },
+    {
+      "id": "c0d1e1058",
+      "name": "Sajith Pandarakottilil",
+      "email": "saajith@gmail.com",
+      "department": "IT",
+      "role": "Architect",
+      "phone": "9256406508"
     }
   ]
 }

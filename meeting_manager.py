@@ -13,7 +13,7 @@ from nlu_engine import (
     parse_command, generate_followup_question,
     generate_confirmation_message, classify_confirmation
 )
-from config import DEFAULT_MEETING_DURATION_MINUTES, SMTP_EMAIL
+from config import DEFAULT_MEETING_DURATION_MINUTES, SMTP_EMAIL, get_meeting_app_link, debug_log
 from communication import send_meeting_invite_notification, send_meeting_invite_to_participants
 
 
@@ -25,6 +25,7 @@ class ConversationState:
     AWAITING_CONFIRMATION = "awaiting_confirmation"
     AWAITING_SLOT_CHOICE = "awaiting_slot_choice"
     AWAITING_DISAMBIGUATION = "awaiting_disambiguation"
+    AWAITING_FOLLOWUP_SELECTION = "awaiting_followup_selection"
 
 
 class MeetingManager:
@@ -49,6 +50,7 @@ class MeetingManager:
         self.resolved_participants = []    # Resolved contact objects
         self.missing_fields = []           # Fields still needed
         self.disambiguation_context = {}   # For resolving ambiguous names
+        self.followup_candidates = []      # Candidate parent meetings for follow-up
         self.conversation_history = []     # Message history for NLU context
 
     def reset(self):
@@ -58,6 +60,7 @@ class MeetingManager:
         self.resolved_participants = []
         self.missing_fields = []
         self.disambiguation_context = {}
+        self.followup_candidates = []
 
     # ─── Main Processing Entry Point ─────────────────────────────────────
 
@@ -96,6 +99,9 @@ class MeetingManager:
 
         if self.state == ConversationState.AWAITING_SLOT_CHOICE:
             return self._handle_slot_choice(user_message)
+
+        if self.state == ConversationState.AWAITING_FOLLOWUP_SELECTION:
+            return self._handle_followup_selection(user_message)
 
         if self.state == ConversationState.AWAITING_DISAMBIGUATION:
             # Same as COLLECTING_INFO: if user sends a complete new schedule request, restart flow
@@ -187,6 +193,13 @@ class MeetingManager:
         meeting = parsed.get("meeting_details", {})
         missing = parsed.get("missing_fields", [])
 
+        intent = parsed.get("intent", "")
+        is_followup = (intent == "followup_meeting") or meeting.get("is_followup", False)
+        followup_ref = (
+            meeting.get("followup_reference", "")
+            or parsed.get("followup_reference", "")
+        )
+
         self.pending_meeting = {
             "title": meeting.get("title", ""),
             "date": meeting.get("date", ""),
@@ -195,9 +208,30 @@ class MeetingManager:
             "description": meeting.get("description", ""),
             "participants_raw": meeting.get("participants", []),
             "use_first_available": meeting.get("use_first_available", False),
-            "is_followup": meeting.get("is_followup", False),
-            "followup_reference": meeting.get("followup_reference", ""),
+            "is_followup": is_followup,
+            "followup_reference": followup_ref,
+            "parent_meeting_id": None,
+            "parent_meeting_title": None,
         }
+
+        # Resolve follow-up reference to an actual parent meeting
+        if self.pending_meeting["is_followup"]:
+            self._resolve_followup_parent()
+            if self.followup_candidates:
+                self.state = ConversationState.AWAITING_FOLLOWUP_SELECTION
+                lines = ["I found multiple meetings that could be the original. Which one is this a follow-up to?\n"]
+                for i, m in enumerate(self.followup_candidates, 1):
+                    lines.append(
+                        f"  {i}. **{m.get('title', 'Untitled')}** — "
+                        f"{m.get('date', '')} at {m.get('time', '')} "
+                        f"({', '.join(m.get('participants', []))})"
+                    )
+                lines.append("\nEnter the number, or type **skip** to proceed without linking.")
+                return {
+                    "message": "\n".join(lines),
+                    "action": "awaiting_input",
+                    "data": {},
+                }
 
         # Step 1: Resolve participants
         resolution = self._resolve_all_participants(self.pending_meeting["participants_raw"])
@@ -468,10 +502,36 @@ class MeetingManager:
         """Try to directly parse simple responses for time/date/duration."""
         text_lower = text.strip().lower()
 
-        # Try parsing common time formats
         import re
 
-        # Time patterns: "2pm", "2:00 PM", "14:00", "at 3"
+        # ── Date patterns ──
+        if "date" in self.missing_fields and not self.pending_meeting.get("date"):
+            today = datetime.now()
+            if "today" in text_lower:
+                self.pending_meeting["date"] = today.strftime("%Y-%m-%d")
+            elif "tomorrow" in text_lower:
+                self.pending_meeting["date"] = (today + timedelta(days=1)).strftime("%Y-%m-%d")
+            else:
+                # Day names: "monday", "next tuesday", etc.
+                day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+                for i, day in enumerate(day_names):
+                    if day in text_lower:
+                        current_weekday = today.weekday()
+                        days_ahead = (i - current_weekday) % 7
+                        if days_ahead == 0:
+                            days_ahead = 7
+                        if "next" in text_lower:
+                            days_ahead += 7
+                        target = today + timedelta(days=days_ahead)
+                        self.pending_meeting["date"] = target.strftime("%Y-%m-%d")
+                        break
+                # ISO date: "2026-02-21"
+                if not self.pending_meeting.get("date"):
+                    iso_match = re.search(r'(\d{4}-\d{2}-\d{2})', text_lower)
+                    if iso_match:
+                        self.pending_meeting["date"] = iso_match.group(1)
+
+        # ── Time patterns: "2pm", "2:00 PM", "14:00", "at 3" ──
         time_patterns = [
             (r'(\d{1,2}):(\d{2})\s*(am|pm)', self._parse_ampm_time),
             (r'(\d{1,2})\s*(am|pm)', self._parse_ampm_simple),
@@ -487,7 +547,7 @@ class MeetingManager:
                         self.pending_meeting["time"] = time_str
                         break
 
-        # Duration patterns: "45 minutes", "1 hour", "30 min"
+        # ── Duration patterns: "45 minutes", "1 hour", "30 min" ──
         if "duration" in self.missing_fields and not self.pending_meeting.get("duration_minutes"):
             dur_match = re.search(r'(\d+)\s*(min|minute|minutes|mins)', text_lower)
             if dur_match:
@@ -497,7 +557,6 @@ class MeetingManager:
                 if hour_match:
                     self.pending_meeting["duration_minutes"] = int(float(hour_match.group(1)) * 60)
 
-            # "default" or "45 min default"
             if "default" in text_lower and not self.pending_meeting.get("duration_minutes"):
                 self.pending_meeting["duration_minutes"] = DEFAULT_MEETING_DURATION_MINUTES
 
@@ -573,7 +632,11 @@ class MeetingManager:
         # Generate title if missing
         if not self.pending_meeting.get("title"):
             participant_names = [p["name"] for p in self.resolved_participants[:3]]
-            self.pending_meeting["title"] = f"Meeting with {', '.join(participant_names)}"
+            base_title = f"Meeting with {', '.join(participant_names)}"
+            if self.pending_meeting.get("is_followup"):
+                self.pending_meeting["title"] = f"Follow-up: {base_title}"
+            else:
+                self.pending_meeting["title"] = base_title
 
         date_str = self.pending_meeting.get("date", "")
         time_str = self.pending_meeting.get("time", "")
@@ -682,7 +745,7 @@ class MeetingManager:
                 "calendar_event_link": cal_result.get("html_link", ""),
             },
             parent_meeting_id=(
-                self.pending_meeting.get("followup_reference")
+                self.pending_meeting.get("parent_meeting_id")
                 if self.pending_meeting.get("is_followup")
                 else None
             ),
@@ -702,7 +765,13 @@ class MeetingManager:
             if cal_result.get("meet_link"):
                 msg_parts.append(f"[Join Google Meet]({cal_result['meet_link']})")
 
+            if self.pending_meeting.get("is_followup") and self.pending_meeting.get("parent_meeting_id"):
+                parent_title = self.pending_meeting.get("parent_meeting_title") or self.pending_meeting["parent_meeting_id"]
+                msg_parts.append(f"\n🔗 **Linked as follow-up** to: *{parent_title}*")
+
             msg_parts.append(f"\nCalendar invites have been sent to all participants.")
+
+            meeting_app_link = get_meeting_app_link(meeting_record["id"])
 
             # Notify the organizer by email that the meeting invite is being sent
             if SMTP_EMAIL:
@@ -713,6 +782,7 @@ class MeetingManager:
                     time_str=meeting_dt.strftime("%I:%M %p"),
                     participant_names=participant_names,
                     calendar_link=cal_result.get("html_link", ""),
+                    meeting_app_link=meeting_app_link,
                 )
 
             # Send email notification to each participant (e.g. Anirban Das) so they receive the invite
@@ -726,6 +796,7 @@ class MeetingManager:
                     participant_names=participant_names,
                     calendar_link=cal_result.get("html_link", ""),
                     meet_link=cal_result.get("meet_link", ""),
+                    meeting_app_link=meeting_app_link,
                 )
         else:
             msg_parts = [
@@ -736,6 +807,8 @@ class MeetingManager:
                 f"**Time:** {meeting_dt.strftime('%I:%M %p')} ({duration} minutes)",
                 f"**Participants:** {', '.join(participant_names)}",
             ]
+            meeting_app_link = get_meeting_app_link(meeting_record["id"])
+
             # Still notify participants by email so they receive the invite even when calendar fails
             if attendee_emails:
                 send_meeting_invite_to_participants(
@@ -747,6 +820,7 @@ class MeetingManager:
                     participant_names=participant_names,
                     calendar_link=cal_result.get("html_link", ""),
                     meet_link=cal_result.get("meet_link", ""),
+                    meeting_app_link=meeting_app_link,
                 )
 
         self.reset()
@@ -923,6 +997,7 @@ class MeetingManager:
                             participant_names=meeting.get("participants", []),
                             calendar_link=new_event_link,
                             meet_link=create_result.get("meet_link", ""),
+                            meeting_app_link=get_meeting_app_link(meeting["id"]),
                         )
 
         time_str_display = meeting_dt.strftime("%I:%M %p")
@@ -972,6 +1047,182 @@ class MeetingManager:
         if not candidates:
             return None
         return sorted(candidates, key=lambda x: x.get("created_at", ""), reverse=True)[0]
+
+    def _resolve_followup_parent(self):
+        """
+        Resolve the free-text followup_reference to an actual parent meeting ID.
+        Uses participant names + date hints from the reference to find candidates.
+        If exactly one match, sets parent_meeting_id directly.
+        If multiple, defers to disambiguation via AWAITING_FOLLOWUP_SELECTION.
+        """
+        ref = self.pending_meeting.get("followup_reference", "")
+        participants_raw = self.pending_meeting.get("participants_raw", [])
+        debug_log(f"[FollowUp] Resolving parent — ref='{ref}', participants_raw={participants_raw}")
+
+        # Collect participant name hints from both participants and reference text
+        hint_names = []
+        for p in participants_raw:
+            if isinstance(p, dict):
+                hint_names.append(p.get("name", "").lower())
+            elif isinstance(p, str):
+                hint_names.append(p.lower())
+
+        # Also extract names that may be in the followup_reference text
+        if ref:
+            for word in ref.replace(",", " ").split():
+                w = word.strip().lower()
+                if len(w) > 2 and w not in ("meeting", "with", "yesterday", "today",
+                    "last", "week", "month", "the", "for", "from", "about", "him",
+                    "her", "them", "that", "this", "follow", "followup", "follow-up"):
+                    if w not in hint_names:
+                        hint_names.append(w)
+
+        # Search for candidate parent meetings
+        all_meetings = self.meeting_store.meetings
+        if not all_meetings:
+            return
+
+        # Parse any date/time cues from followup_reference
+        import re
+        ref_lower = ref.lower() if ref else ""
+        ref_date = None
+        ref_time = None
+        today = datetime.now()
+
+        if "yesterday" in ref_lower:
+            ref_date = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+        elif "today" in ref_lower:
+            ref_date = today.strftime("%Y-%m-%d")
+        elif "last week" in ref_lower:
+            ref_date = None  # too broad, skip date filter
+
+        # Extract time like "6:30", "2pm", etc.
+        ref_times = []
+        time_match = re.search(r'(\d{1,2}):(\d{2})\s*(am|pm)?', ref_lower)
+        if time_match:
+            h, m = int(time_match.group(1)), int(time_match.group(2))
+            ampm = time_match.group(3)
+            if ampm == "pm" and h != 12:
+                ref_times.append(f"{h+12:02d}:{m:02d}")
+            elif ampm == "am" and h == 12:
+                ref_times.append(f"00:{m:02d}")
+            elif ampm:
+                ref_times.append(f"{h:02d}:{m:02d}")
+            else:
+                # No AM/PM: try both interpretations
+                ref_times.append(f"{h:02d}:{m:02d}")
+                if h < 12:
+                    ref_times.append(f"{h+12:02d}:{m:02d}")
+        else:
+            simple_match = re.search(r'(\d{1,2})\s*(am|pm)', ref_lower)
+            if simple_match:
+                h = int(simple_match.group(1))
+                ampm = simple_match.group(2)
+                if ampm == "pm" and h != 12:
+                    h += 12
+                elif ampm == "am" and h == 12:
+                    h = 0
+                ref_times.append(f"{h:02d}:00")
+
+        def score_meeting(m):
+            score = 0
+            m_participants = [p.lower() for p in m.get("participants", [])]
+            for hint in hint_names:
+                if any(hint in mp for mp in m_participants):
+                    score += 10
+            if ref_date and m.get("date") == ref_date:
+                score += 20
+            if ref_times:
+                m_time = m.get("time", "")
+                if any(m_time.startswith(rt) for rt in ref_times):
+                    score += 15
+            return score
+
+        debug_log(f"[FollowUp] hint_names={hint_names}, ref_date={ref_date}, ref_times={ref_times}")
+
+        scored = [(m, score_meeting(m)) for m in all_meetings]
+        scored = [(m, s) for m, s in scored if s >= 10]  # at least one participant match
+        scored.sort(key=lambda x: x[1], reverse=True)
+
+        debug_log(f"[FollowUp] {len(scored)} candidate(s): {[(m.get('title','?'), m.get('date','?'), m.get('time','?'), s) for m, s in scored[:5]]}")
+
+        if not scored:
+            debug_log("[FollowUp] No candidates found — proceeding without linkage")
+            return
+
+        if len(scored) == 1 or scored[0][1] > scored[1][1]:
+            parent = scored[0][0]
+            self.pending_meeting["parent_meeting_id"] = parent["id"]
+            self.pending_meeting["parent_meeting_title"] = parent.get("title", "")
+            debug_log(f"[FollowUp] Auto-linked to parent: {parent['id']} ({parent.get('title','')})")
+            return
+
+        # Multiple candidates with equal score — ask the user
+        debug_log(f"[FollowUp] Ambiguous — {len(scored)} candidates with tied scores, asking user")
+        self.followup_candidates = [m for m, _ in scored[:5]]
+
+    def _handle_followup_selection(self, user_message: str) -> dict:
+        """Handle user's selection of which meeting is the parent for follow-up."""
+        text = user_message.strip()
+
+        # Check for a number selection
+        import re
+        num_match = re.match(r'^(\d+)$', text)
+        if num_match:
+            idx = int(num_match.group(1)) - 1
+            if 0 <= idx < len(self.followup_candidates):
+                parent = self.followup_candidates[idx]
+                self.pending_meeting["parent_meeting_id"] = parent["id"]
+                self.pending_meeting["parent_meeting_title"] = parent.get("title", "")
+                self.followup_candidates = []
+                # Resume normal scheduling flow
+                return self._resume_after_followup_resolved()
+
+        # Try matching by title keywords
+        text_lower = text.lower()
+        for m in self.followup_candidates:
+            if text_lower in m.get("title", "").lower():
+                self.pending_meeting["parent_meeting_id"] = m["id"]
+                self.pending_meeting["parent_meeting_title"] = m.get("title", "")
+                self.followup_candidates = []
+                return self._resume_after_followup_resolved()
+
+        # If "none" or "skip"
+        if text_lower in ("none", "skip", "no", "cancel linkage", "skip linking"):
+            self.pending_meeting["is_followup"] = False
+            self.followup_candidates = []
+            return self._resume_after_followup_resolved()
+
+        return {
+            "message": "I didn't catch that. Please enter the number of the meeting you'd like to link as the original, or type **skip** to proceed without linking.",
+            "action": "awaiting_input",
+            "data": {},
+        }
+
+    def _resume_after_followup_resolved(self) -> dict:
+        """Continue the scheduling flow after the follow-up parent has been resolved."""
+        # Resolve participants (may already be done, but safe to redo)
+        resolution = self._resolve_all_participants(self.pending_meeting["participants_raw"])
+        if resolution["needs_disambiguation"]:
+            self.state = ConversationState.AWAITING_DISAMBIGUATION
+            self.disambiguation_context = resolution["disambiguation_needed"]
+            return {
+                "message": resolution["disambiguation_message"],
+                "action": "awaiting_input",
+                "data": {},
+            }
+        self.resolved_participants = resolution["resolved"]
+        self.missing_fields = self._compute_missing_fields()
+        if self.missing_fields == ["duration"]:
+            self.pending_meeting["duration_minutes"] = DEFAULT_MEETING_DURATION_MINUTES
+            self.missing_fields = []
+        if self.missing_fields:
+            self.state = ConversationState.COLLECTING_INFO
+            question = generate_followup_question(self.missing_fields)
+            return {"message": question, "action": "awaiting_input", "data": {"missing": self.missing_fields}}
+        if self.pending_meeting.get("use_first_available") and self.pending_meeting.get("date"):
+            return self._find_and_offer_slot()
+        return self._present_confirmation()
 
     @staticmethod
     def _extract_add_target_from_message(message: str) -> list:
@@ -1088,6 +1339,7 @@ class MeetingManager:
                 participant_names=existing_names,
                 calendar_link=cal_result.get("html_link", meeting.get("calendar_event_link", "")),
                 meet_link=cal_result.get("meet_link", ""),
+                meeting_app_link=get_meeting_app_link(meeting["id"]),
             )
         msg = f"Done. I've added **{', '.join(added_names or new_names)}** to **{meeting.get('title', 'Meeting')}**. "
         if cal_result.get("success"):

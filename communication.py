@@ -198,6 +198,8 @@ def send_mom_email(
     to_emails: list[str],
     mom_data: dict,
     audio_summary_path: Optional[str] = None,
+    meeting_app_link: str = "",
+    has_recording: bool = False,
 ) -> dict:
     """
     Send Minutes of Meeting email to attendees.
@@ -206,6 +208,8 @@ def send_mom_email(
         to_emails: List of attendee email addresses
         mom_data: MoM data dict
         audio_summary_path: Optional path to audio summary file
+        meeting_app_link: Direct link to the meeting in the app
+        has_recording: Whether a meeting recording is available in the app
     
     Returns:
         dict with 'success' and optional 'error'
@@ -213,8 +217,8 @@ def send_mom_email(
     subject = f"Minutes of Meeting: {mom_data.get('title', 'Meeting')} - {mom_data.get('date', '')}"
 
     # Build HTML email
-    html = _build_mom_email_html(mom_data, audio_summary_path)
-    text = _build_mom_email_text(mom_data)
+    html = _build_mom_email_html(mom_data, audio_summary_path, meeting_app_link, has_recording)
+    text = _build_mom_email_text(mom_data, meeting_app_link, has_recording)
 
     attachments = []
     if audio_summary_path and os.path.exists(audio_summary_path):
@@ -233,6 +237,7 @@ def send_meeting_invite_notification(
     time_str: str,
     participant_names: list,
     calendar_link: str = "",
+    meeting_app_link: str = "",
 ) -> dict:
     """
     Send the user an email confirming that the meeting invite is being sent to participants.
@@ -268,6 +273,7 @@ def send_meeting_invite_notification(
         </table>
         <p>Calendar invites have been sent to all participants.</p>
         {f'<p><a href="{calendar_link}" style="color: #667eea;">Open in Calendar</a></p>' if calendar_link else ''}
+        {f'<p><a href="{meeting_app_link}" style="color: #667eea;">View Meeting in Smart Office Assistant</a></p>' if meeting_app_link else ''}
         <p style="color: #666; font-size: 0.9em;">— Smart Office Assistant</p>
     </body>
     </html>
@@ -281,6 +287,8 @@ def send_meeting_invite_notification(
         f"Participants: {participants_line}\n\n"
         "Calendar invites have been sent to all participants."
     )
+    if meeting_app_link:
+        text += f"\nView Meeting: {meeting_app_link}"
 
     return send_email([to_email], subject, html, text)
 
@@ -294,6 +302,7 @@ def send_meeting_invite_to_participants(
     participant_names: list = None,
     calendar_link: str = "",
     meet_link: str = "",
+    meeting_app_link: str = "",
 ) -> dict:
     """
     Send each participant an email notifying them they have been invited to the meeting.
@@ -334,6 +343,7 @@ def send_meeting_invite_to_participants(
         </table>
         {f'<p><a href="{calendar_link}" style="color: #667eea;">Add to Calendar</a></p>' if calendar_link else ''}
         {f'<p><a href="{meet_link}" style="color: #667eea;">Join Google Meet</a></p>' if meet_link else ''}
+        {f'<p><a href="{meeting_app_link}" style="color: #667eea;">View Meeting in Smart Office Assistant</a></p>' if meeting_app_link else ''}
         <p style="color: #666; font-size: 0.9em;">— Smart Office Assistant</p>
     </body>
     </html>
@@ -351,6 +361,8 @@ def send_meeting_invite_to_participants(
         text += f"Add to Calendar: {calendar_link}\n"
     if meet_link:
         text += f"Join Google Meet: {meet_link}\n"
+    if meeting_app_link:
+        text += f"View Meeting: {meeting_app_link}\n"
 
     result = send_email(attendee_emails, subject, html, text)
     if result.get("success"):
@@ -360,7 +372,7 @@ def send_meeting_invite_to_participants(
     return result
 
 
-def _build_mom_email_html(mom_data: dict, audio_path: Optional[str] = None) -> str:
+def _build_mom_email_html(mom_data: dict, audio_path: Optional[str] = None, meeting_app_link: str = "", has_recording: bool = False) -> str:
     """Build HTML email content for MoM."""
     title = mom_data.get("title", "Meeting")
     date = mom_data.get("date", "")
@@ -423,6 +435,21 @@ def _build_mom_email_html(mom_data: dict, audio_path: Optional[str] = None) -> s
         </div>
         """
 
+    if has_recording and meeting_app_link:
+        html += f"""
+        <div style="margin-top: 20px; padding: 15px; background: #fff3e0; border-radius: 8px;">
+            <p><strong>🎙️ Recording Available:</strong> The meeting recording is available in the app.
+            <a href="{meeting_app_link}" style="color: #667eea; font-weight: 600;">Listen to Recording</a></p>
+        </div>
+        """
+
+    if meeting_app_link:
+        html += f"""
+        <div style="margin-top: 20px;">
+            <a href="{meeting_app_link}" style="display: inline-block; padding: 10px 20px; background: #667eea; color: white; text-decoration: none; border-radius: 6px; font-weight: 600;">View Meeting in Smart Office Assistant</a>
+        </div>
+        """
+
     html += """
             <hr style="margin-top: 30px; border: none; border-top: 1px solid #e0e0e0;">
             <p style="color: #999; font-size: 12px;">
@@ -435,7 +462,7 @@ def _build_mom_email_html(mom_data: dict, audio_path: Optional[str] = None) -> s
     return html
 
 
-def _build_mom_email_text(mom_data: dict) -> str:
+def _build_mom_email_text(mom_data: dict, meeting_app_link: str = "", has_recording: bool = False) -> str:
     """Build plain text email content for MoM."""
     lines = [
         f"MINUTES OF MEETING: {mom_data.get('title', 'Meeting')}",
@@ -464,6 +491,14 @@ def _build_mom_email_text(mom_data: dict) -> str:
                 f"[Owner: {item.get('owner', 'TBD')}] "
                 f"[Deadline: {item.get('deadline', 'TBD')}]"
             )
+        lines.append("")
+
+    if has_recording and meeting_app_link:
+        lines.append(f"RECORDING AVAILABLE: Listen at {meeting_app_link}")
+        lines.append("")
+
+    if meeting_app_link:
+        lines.append(f"View Meeting: {meeting_app_link}")
         lines.append("")
 
     return "\n".join(lines)

@@ -27,10 +27,13 @@ IMPORTANT RULES:
 7. If date is NOT specified, mark it as missing in missing_fields.
 8. If "first available slot" or similar is mentioned, set use_first_available to true.
 9. Duration defaults can be left empty if not mentioned - the system will ask or use default.
-10. Always identify if this is a follow-up to a previous meeting.
+10. FOLLOW-UP MEETINGS: When the user says "follow up", "follow-up", or "followup" meeting, set is_followup to true and use intent "followup_meeting". Put the reference to the original meeting in followup_reference — include participant names, date cues (e.g. "yesterday", "last Tuesday"), and time cues (e.g. "at 6:30") so the system can match it.
+    CRITICAL: The date/time fields in meeting_details must ONLY contain the NEW follow-up meeting's scheduled date/time. Any date/time that describes the ORIGINAL meeting (e.g. "my meeting yesterday at 6:30") belongs ONLY in followup_reference, NOT in the date/time fields. If the user does NOT specify when the new follow-up should be scheduled, mark date and/or time as missing_fields.
+    Example: "Create a follow-up meeting with Sajith on my meeting with him today at 6:30" → followup_reference="meeting with Sajith today at 6:30", date and time should be in missing_fields (the user did NOT say when the NEW meeting should be), participants=[{{name:"Sajith"}}], is_followup=true.
+    Example: "Schedule a follow-up with Sajith for tomorrow at 3pm, on our meeting yesterday" → followup_reference="meeting with Sajith yesterday", date="(tomorrow's date)", time="15:00", participants=[{{name:"Sajith"}}], is_followup=true.
 11. Detect the intent: schedule_meeting, reschedule_meeting, cancel_meeting,
     add_attendees_to_meeting, remove_attendees_from_meeting,
-    upload_recording, search_mom, manage_contacts, list_meetings, general_chat.
+    upload_recording, search_mom, manage_contacts, list_meetings, general_chat, followup_meeting.
 12. For names, preserve them as spoken. If only first name given, include just first name.
 13. Parse meeting title/subject if mentioned, otherwise generate a reasonable one.
 14. For reschedule_meeting: use meeting_ref_participants to identify WHICH meeting (e.g. "my meeting with Nitin" -> meeting_ref_participants: [{{name: "Nitin"}}]). Put the new date and time in date (YYYY-MM-DD) and time (HH:MM). Ignore extra text like "and add X" for finding the meeting.
@@ -258,6 +261,9 @@ def generate_confirmation_message(meeting_details: dict, resolved_participants: 
 
     if meeting_details.get("description"):
         msg_parts.append(f"**Description:** {meeting_details['description']}")
+
+    if meeting_details.get("is_followup") and meeting_details.get("parent_meeting_title"):
+        msg_parts.append(f"🔗 **Follow-up to:** {meeting_details['parent_meeting_title']}")
 
     msg_parts.append("\nShall I go ahead and schedule this? (Yes/No)")
     return "\n".join(msg_parts)

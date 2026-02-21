@@ -1,0 +1,101 @@
+%%{init: {"theme":"base","themeVariables":{"fontSize":"13px"},"flowchart":{"padding":8,"nodeSpacing":30,"rankSpacing":40}}}%%
+
+flowchart LR
+
+%% ── USER ──
+    User([fa:fa-user User\nBrowser])
+
+%% ── UI LAYER ──
+    subgraph UI["Streamlit Web App"]
+        direction TB
+        Login[Login]
+        Chat[Chat Interface]
+        Contacts[Address Book]
+        Meetings[Meetings]
+        MoMs[MoM Archive]
+        Settings[Settings]
+    end
+
+%% ── FUNCTIONALITY BLOCKS ──
+    subgraph FUNC["Core Functionalities"]
+        direction TB
+
+        subgraph F1["Meeting Scheduling"]
+            NLU["NLU Engine\n─────────\nIntent Classification\nEntity Extraction"]
+            StateMachine["Conversation\nState Machine\n─────────\n5-state flow\nMulti-turn dialogue"]
+            CalService["Calendar Service\n─────────\nEvent CRUD\nAvailability Check\nGoogle Meet links"]
+        end
+
+        subgraph F2["Meeting Documentation"]
+            Transcribe["Transcription\n─────────\nAudio/Video → Text\nFormat validation"]
+            MoMGen["MoM Generator\n─────────\nSummary, Decisions\nAction Items"]
+        end
+
+        subgraph F3["Communication"]
+            TTS["Text-to-Speech\n─────────\nAction item\naudio summaries"]
+            EmailSvc["Email Service\n─────────\nMoM distribution\nMeeting invites"]
+        end
+
+        subgraph F4["Data Management"]
+            AddrBook["Address Book\n─────────\nContact resolution\nDepartment lookup"]
+            MtgStore["Meeting Store\n─────────\nMeeting records\nThread tracking"]
+            MoMStore["MoM Store\n─────────\nMoM index + files\nPer-user storage"]
+        end
+    end
+
+%% ── TECH COMPONENTS ──
+    subgraph TECH["External Services & Tech"]
+        direction TB
+        GPT["OpenAI GPT-4o-mini\n(Function Calling)"]
+        Whisper["OpenAI Whisper"]
+        TTSAPI["OpenAI TTS"]
+        GCal["Google Calendar\nAPI v3 + OAuth 2.0"]
+        SMTP["SMTP Server\n(TLS)"]
+        JSON["Local JSON\nFile Storage"]
+    end
+
+%% ── USER → UI ──
+    User -->|text / voice| UI
+
+%% ── UI → FUNCTIONS ──
+    Chat --> NLU
+    Chat -.->|navigates to| Meetings
+    Chat -.->|navigates to| MoMs
+    Meetings --> Transcribe
+    Meetings --> MtgStore
+    MoMs --> MoMStore
+    MoMs --> EmailSvc
+    MoMs --> TTS
+    Contacts --> AddrBook
+    Login --> JSON
+
+%% ── FUNCTION INTERCONNECTIONS ──
+    NLU --> StateMachine
+    StateMachine --> CalService
+    StateMachine --> AddrBook
+    StateMachine --> MtgStore
+    StateMachine --> EmailSvc
+    Transcribe --> MoMGen
+    MoMGen --> MoMStore
+
+%% ── FUNCTIONS → TECH ──
+    NLU -..->|intent + entity\nextraction| GPT
+    MoMGen -..->|structured MoM\ngeneration| GPT
+    Transcribe -..->|speech-to-text| Whisper
+    TTS -..->|audio generation| TTSAPI
+    CalService -..->|events / freebusy| GCal
+    EmailSvc -..->|send emails| SMTP
+    MtgStore -..->|read / write| JSON
+    MoMStore -..->|read / write| JSON
+    AddrBook -..->|read / write| JSON
+
+%% ── STYLES ──
+    classDef userCls fill:#1976D2,stroke:#0D47A1,color:#fff,stroke-width:2px
+    classDef uiCls fill:#43A047,stroke:#2E7D32,color:#fff
+    classDef funcCls fill:#FF8F00,stroke:#E65100,color:#fff
+    classDef techCls fill:#7B1FA2,stroke:#4A148C,color:#fff
+
+    class User userCls
+    class Login,Chat,Contacts,Meetings,MoMs,Settings uiCls
+    class NLU,StateMachine,CalService,Transcribe,MoMGen,TTS,EmailSvc,AddrBook,MtgStore,MoMStore funcCls
+    class GPT,Whisper,TTSAPI,GCal,SMTP,JSON techCls
